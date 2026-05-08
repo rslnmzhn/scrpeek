@@ -20,32 +20,58 @@
 
 #include "adb_list.h"
 
-#include <stdbool.h>
+#include <errno.h>
 #include <limits.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #ifdef _WIN32
 # include <windows.h>
-# include <shlwapi.h>
 # define SC_POPEN _popen
 # define SC_PCLOSE _pclose
 # define SC_ADB_EXE "adb.exe"
+# define SC_PATH_SEP '\\'
 #else
+# include <unistd.h>
 # define SC_POPEN popen
 # define SC_PCLOSE pclose
 # define SC_ADB_EXE "adb"
+# define SC_PATH_SEP '/'
 #endif
 
 #define SC_ADB_HEADER "List of devices attached"
 #define SC_ADB_HEADER_LEN (sizeof(SC_ADB_HEADER) - 1)
 
+static bool
+sc_copy_field(char *dst, size_t dst_size, const char *src) {
+    size_t len = strlen(src);
+    if (len >= dst_size) {
+        errno = ENAMETOOLONG;
+        return false;
+    }
+    memcpy(dst, src, len + 1);
+    return true;
+}
+
+static char *
+sc_strdup(const char *s) {
+    size_t len = strlen(s) + 1;
+    char *copy = malloc(len);
+    if (!copy) {
+        return NULL;
+    }
+    memcpy(copy, s, len);
+    return copy;
+}
+
 #ifdef _WIN32
 static char *
-sc_strdup_wide_path(const wchar_t *path) {
+sc_wide_to_utf8(const wchar_t *path) {
     int len = WideCharToMultiByte(CP_UTF8, 0, path, -1, NULL, 0, NULL, NULL);
     if (len <= 0) {
+        errno = ENOENT;
         return NULL;
     }
 
@@ -56,6 +82,7 @@ sc_strdup_wide_path(const wchar_t *path) {
 
     if (!WideCharToMultiByte(CP_UTF8, 0, path, -1, utf8, len, NULL, NULL)) {
         free(utf8);
+        errno = ENOENT;
         return NULL;
     }
 
@@ -63,100 +90,156 @@ sc_strdup_wide_path(const wchar_t *path) {
 }
 
 static char *
-sc_find_bundled_adb(void) {
+sc_find_exe_dir_adb(void) {
     wchar_t path[MAX_PATH];
-    DWORD len = GetModuleFileNameW(NULL, path, ARRAYSIZE(path));
-    if (!len || len >= ARRAYSIZE(path)) {
+    DWORD len = GetModuleFileNameW(NULL, path, (DWORD) (sizeof(path) / sizeof(path[0])));
+    if (!len || len >= (DWORD) (sizeof(path) / sizeof(path[0]))) {
+        errno = ENOENT;
         return NULL;
     }
 
-    if (!PathRemoveFileSpecW(path)) {
+    wchar_t *slash = wcsrchr(path, L'\\');
+    if (!slash) {
+        errno = ENOENT;
+        return NULL;
+    }
+    slash[1] = L'\0';
+
+    if (wcslen(path) + wcslen(L"adb.exe") + 1 > sizeof(path) / sizeof(path[0])) {
+        errno = ENAMETOOLONG;
+        return NULL;
+    }
+    wcscat(path, L"adb.exe");
+
+    DWORD attrs = GetFileAttributesW(path);
+    if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+        errno = ENOENT;
         return NULL;
     }
 
-    if (!PathAppendW(path, L"adb.exe") || !PathFileExistsW(path)) {
-        return NULL;
-    }
-
-    return sc_strdup_wide_path(path);
+    return sc_wide_to_utf8(path);
 }
 
 static char *
 sc_find_path_adb(void) {
     wchar_t path[MAX_PATH];
-    DWORD len = SearchPathW(NULL, L"adb.exe", NULL, ARRAYSIZE(path), path, NULL);
-    if (!len || len >= ARRAYSIZE(path)) {
+    DWORD len = SearchPathW(NULL, L"adb.exe", NULL,
+                           (DWORD) (sizeof(path) / sizeof(path[0])), path, NULL);
+    if (!len || len >= (DWORD) (sizeof(path) / sizeof(path[0]))) {
+        errno = ENOENT;
         return NULL;
     }
 
-    return sc_strdup_wide_path(path);
+    return sc_wide_to_utf8(path);
+}
+#else
+static bool
+sc_is_executable(const char *path) {
+    return access(path, X_OK) == 0;
 }
 
-static void
-sc_adb_not_found(void) {
-    fprintf(stderr, "adb.exe not found. Download Android Platform Tools: "
-            "https://developer.android.com/tools/releases/platform-tools\n");
-    exit(1);
+static char *
+sc_find_exe_dir_adb(void) {
+# if defined(__APPLE__)
+    errno = ENOENT;
+    return NULL;
+# elif defined(__linux__)
+    char exe_path[PATH_MAX];
+    ssize_t len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+    if (len < 0) {
+        return NULL;
+    }
+    exe_path[len] = '\0';
+
+    char *slash = strrchr(exe_path, '/');
+    if (!slash) {
+        errno = ENOENT;
+        return NULL;
+    }
+    slash[1] = '\0';
+
+    if (strlen(exe_path) + sizeof(SC_ADB_EXE) > sizeof(exe_path)) {
+        errno = ENAMETOOLONG;
+        return NULL;
+    }
+    strcat(exe_path, SC_ADB_EXE);
+
+    if (!sc_is_executable(exe_path)) {
+        errno = ENOENT;
+        return NULL;
+    }
+
+    return sc_strdup(exe_path);
+# else
+    errno = ENOENT;
+    return NULL;
+# endif
+}
+
+static char *
+sc_find_path_adb(void) {
+    const char *path = getenv("PATH");
+    if (!path) {
+        errno = ENOENT;
+        return NULL;
+    }
+
+    const char *start = path;
+    while (*start) {
+        const char *end = strchr(start, ':');
+        size_t dir_len = end ? (size_t) (end - start) : strlen(start);
+        if (dir_len > 0) {
+            size_t needed = dir_len + 1 + sizeof(SC_ADB_EXE);
+            char *candidate = malloc(needed);
+            if (!candidate) {
+                return NULL;
+            }
+            memcpy(candidate, start, dir_len);
+            candidate[dir_len] = SC_PATH_SEP;
+            memcpy(candidate + dir_len + 1, SC_ADB_EXE, sizeof(SC_ADB_EXE));
+            if (sc_is_executable(candidate)) {
+                return candidate;
+            }
+            free(candidate);
+        }
+
+        if (!end) {
+            break;
+        }
+        start = end + 1;
+    }
+
+    errno = ENOENT;
+    return NULL;
 }
 #endif
 
 static char *
-sc_strdup(const char *s) {
-    size_t len = strlen(s) + 1;
-    char *copy = malloc(len);
-    if (copy) {
-        memcpy(copy, s, len);
-    }
-    return copy;
-}
-
-static char *
 sc_find_adb(void) {
-#ifdef _WIN32
     const char *adb = getenv("SCRCPY_ADB");
     if (adb && adb[0]) {
-        if (getenv("SC_DEBUG")) {
-            fprintf(stderr, "Using SCRCPY_ADB=%s\n", adb);
-        }
         return sc_strdup(adb);
     }
 
-    char *bundled = sc_find_bundled_adb();
-    if (bundled) {
-        if (getenv("SC_DEBUG")) {
-            fprintf(stderr, "Using bundled adb.exe at %s\n", bundled);
-        }
-        return bundled;
+    char *exe_dir_adb = sc_find_exe_dir_adb();
+    if (exe_dir_adb) {
+        return exe_dir_adb;
     }
 
     char *path_adb = sc_find_path_adb();
     if (path_adb) {
-        if (getenv("SC_DEBUG")) {
-            fprintf(stderr, "Using adb.exe from PATH at %s\n", path_adb);
-        }
         return path_adb;
     }
 
-    sc_adb_not_found();
+    errno = ENOENT;
     return NULL;
-#else
-    const char *adb = getenv("ADB");
-    if (adb && adb[0]) {
-        return sc_strdup(adb);
-    }
-
-    if (getenv("SC_DEBUG")) {
-        fprintf(stderr, "Using %s from PATH\n", SC_ADB_EXE);
-    }
-    return sc_strdup(SC_ADB_EXE);
-#endif
 }
 
 static bool
 sc_quote_command_arg(const char *arg, char *dst, size_t dst_size) {
     size_t pos = 0;
-
     if (pos + 1 >= dst_size) {
+        errno = ENAMETOOLONG;
         return false;
     }
     dst[pos++] = '"';
@@ -164,16 +247,19 @@ sc_quote_command_arg(const char *arg, char *dst, size_t dst_size) {
     for (const char *p = arg; *p; ++p) {
         if (*p == '"') {
             if (pos + 2 >= dst_size) {
+                errno = ENAMETOOLONG;
                 return false;
             }
             dst[pos++] = '\\';
         } else if (pos + 1 >= dst_size) {
+            errno = ENAMETOOLONG;
             return false;
         }
         dst[pos++] = *p;
     }
 
     if (pos + 2 > dst_size) {
+        errno = ENAMETOOLONG;
         return false;
     }
     dst[pos++] = '"';
@@ -195,9 +281,14 @@ sc_read_adb_devices(void) {
     }
 
     char command[1100];
+#ifdef _WIN32
+    int written = snprintf(command, sizeof(command), "\"%s devices -l\"", quoted_adb);
+#else
     int written = snprintf(command, sizeof(command), "%s devices -l", quoted_adb);
+#endif
     free(adb);
     if (written < 0 || (size_t) written >= sizeof(command)) {
+        errno = ENAMETOOLONG;
         return NULL;
     }
 
@@ -227,10 +318,9 @@ sc_read_adb_devices(void) {
             cap = new_cap;
         }
 
-        size_t read = fread(buf + len, 1, cap - len - 1, pipe);
-        len += read;
-
-        if (read == 0) {
+        size_t n = fread(buf + len, 1, cap - len - 1, pipe);
+        len += n;
+        if (n == 0) {
             if (ferror(pipe)) {
                 free(buf);
                 (void) SC_PCLOSE(pipe);
@@ -245,38 +335,11 @@ sc_read_adb_devices(void) {
     int status = SC_PCLOSE(pipe);
     if (status != 0) {
         free(buf);
+        errno = EIO;
         return NULL;
     }
 
     return buf;
-}
-
-static void
-sc_device_destroy(struct sc_device *device) {
-    free(device->serial);
-    free(device->transport);
-    free(device->model);
-    free(device->state);
-}
-
-static void
-sc_device_init_empty(struct sc_device *device) {
-    device->serial = NULL;
-    device->transport = NULL;
-    device->model = NULL;
-    device->state = NULL;
-}
-
-static bool
-sc_device_copy_token(char **dst, const char *token, const char *prefix) {
-    size_t prefix_len = strlen(prefix);
-    if (strncmp(token, prefix, prefix_len)) {
-        return true;
-    }
-
-    free(*dst);
-    *dst = sc_strdup(token + prefix_len);
-    return *dst != NULL;
 }
 
 static bool
@@ -290,11 +353,14 @@ sc_parse_device_line(char *line, struct sc_device *device) {
 
     char *s = line;
     size_t serial_len = strcspn(s, " \t");
-    if (!serial_len || s[serial_len] == '\0') {
+    if (!serial_len || !s[serial_len]) {
         return false;
     }
     s[serial_len] = '\0';
-    char *serial = s;
+
+    if (!sc_copy_field(device->serial, sizeof(device->serial), s)) {
+        return false;
+    }
 
     s += serial_len + 1;
     s += strspn(s, " \t");
@@ -305,15 +371,11 @@ sc_parse_device_line(char *line, struct sc_device *device) {
     }
     bool eol = s[state_len] == '\0';
     s[state_len] = '\0';
-    char *state = s;
 
-    sc_device_init_empty(device);
-    device->serial = sc_strdup(serial);
-    device->state = sc_strdup(state);
-    if (!device->serial || !device->state) {
-        sc_device_destroy(device);
+    if (!sc_copy_field(device->state, sizeof(device->state), s)) {
         return false;
     }
+    device->model[0] = '\0';
 
     if (eol) {
         return true;
@@ -330,15 +392,12 @@ sc_parse_device_line(char *line, struct sc_device *device) {
         eol = s[token_len] == '\0';
         s[token_len] = '\0';
 
-        bool ok = sc_device_copy_token(&device->model, s, "model:");
-        ok = ok && sc_device_copy_token(&device->transport, s, "transport_id:");
-        if (ok && !device->transport && !strncmp(s, "usb:", sizeof("usb:") - 1)) {
-            device->transport = sc_strdup(s + sizeof("usb:") - 1);
-            ok = device->transport != NULL;
-        }
-        if (!ok) {
-            sc_device_destroy(device);
-            return false;
+        const char prefix[] = "model:";
+        if (!strncmp(s, prefix, sizeof(prefix) - 1)) {
+            if (!sc_copy_field(device->model, sizeof(device->model),
+                               s + sizeof(prefix) - 1)) {
+                return false;
+            }
         }
 
         if (eol) {
@@ -351,10 +410,15 @@ sc_parse_device_line(char *line, struct sc_device *device) {
 }
 
 static bool
-sc_device_list_push(struct sc_device_list *list, struct sc_device *device) {
-    size_t new_count = list->count + 1;
+sc_device_list_push(struct sc_device_list *list, const struct sc_device *device) {
+    if (list->count == INT_MAX) {
+        errno = EOVERFLOW;
+        return false;
+    }
+
+    int new_count = list->count + 1;
     struct sc_device *new_devices = realloc(list->devices,
-            new_count * sizeof(*new_devices));
+            (size_t) new_count * sizeof(*new_devices));
     if (!new_devices) {
         return false;
     }
@@ -389,7 +453,6 @@ sc_parse_devices(char *str, struct sc_device_list *out) {
             struct sc_device device;
             if (sc_parse_device_line(line, &device)) {
                 if (!sc_device_list_push(out, &device)) {
-                    sc_device_destroy(&device);
                     return false;
                 }
             }
@@ -401,11 +464,19 @@ sc_parse_devices(char *str, struct sc_device_list *out) {
         idx += len + 1;
     }
 
+    if (!header_found) {
+        errno = EPROTO;
+    }
     return header_found;
 }
 
 int
 sc_device_list_get(struct sc_device_list *out) {
+    if (!out) {
+        errno = EINVAL;
+        return -1;
+    }
+
     out->devices = NULL;
     out->count = 0;
 
@@ -421,12 +492,7 @@ sc_device_list_get(struct sc_device_list *out) {
         return -1;
     }
 
-    if (out->count > (size_t) INT_MAX) {
-        sc_device_list_free(out);
-        return -1;
-    }
-
-    return (int) out->count;
+    return out->count;
 }
 
 void
@@ -435,9 +501,6 @@ sc_device_list_free(struct sc_device_list *list) {
         return;
     }
 
-    for (size_t i = 0; i < list->count; ++i) {
-        sc_device_destroy(&list->devices[i]);
-    }
     free(list->devices);
     list->devices = NULL;
     list->count = 0;

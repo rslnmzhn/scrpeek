@@ -17,18 +17,15 @@
 #ifndef SC_TUI_ADB_LIST_H
 #define SC_TUI_ADB_LIST_H
 
-#include <stddef.h>
-
 struct sc_device {
-    char *serial;
-    char *transport;
-    char *model;
-    char *state;
+    char serial[64];
+    char model[64];
+    char state[16];
 };
 
 struct sc_device_list {
     struct sc_device *devices;
-    size_t count;
+    int count;
 };
 
 int
