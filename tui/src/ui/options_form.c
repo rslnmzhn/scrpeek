@@ -16,9 +16,15 @@
 
 #include "ui/options_form.h"
 
+#include "config.h"
+
 #include <ctype.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+static bool
+sc_text_backspace(char *text);
 
 enum sc_field_type {
     SC_FIELD_SECTION,
@@ -30,6 +36,7 @@ enum sc_field_type {
 };
 
 enum sc_field_id {
+    F_PROFILE,
     F_VIDEO,
     F_MAX_SIZE,
     F_MAX_FPS,
@@ -80,6 +87,7 @@ struct sc_field_def {
 };
 
 static const struct sc_field_def sc_fields[] = {
+    {F_PROFILE, SC_FIELD_BUTTON, "Profile", "Load, save, or delete named launch profiles"},
     {F_VIDEO, SC_FIELD_SECTION, "Video", "Video capture and recording options"},
     {F_MAX_SIZE, SC_FIELD_NUMERIC, "Max size", "--max-size value: limit width and height"},
     {F_MAX_FPS, SC_FIELD_NUMERIC, "Max FPS", "--max-fps value: limit capture framerate"},
@@ -129,8 +137,60 @@ static const char *const control_modes[] = {"disabled", "sdk", "uhid", "aoa"};
 static const char *const gamepad_modes[] = {"disabled", "uhid", "aoa"};
 static const char *const verbosity_names[] = {"info", "verbose", "debug", "warn", "error"};
 
+enum sc_profile_mode {
+    SC_PROFILE_IDLE,
+    SC_PROFILE_LOAD,
+    SC_PROFILE_SAVE_AS,
+    SC_PROFILE_DELETE_CONFIRM,
+};
+
+static void
+sc_free_profiles(struct sc_options_form *form) {
+    for (int i = 0; i < form->profile_count; ++i) {
+        free(form->profiles[i]);
+        form->profiles[i] = NULL;
+    }
+    form->profile_count = 0;
+    form->profile_selected = 0;
+}
+
+void
+sc_options_form_profiles_reload(struct sc_options_form *form) {
+    sc_free_profiles(form);
+    form->profile_count = sc_config_list_profiles(form->profiles,
+            (int) (sizeof(form->profiles) / sizeof(form->profiles[0])));
+    if (form->profile_count < 0) {
+        form->profile_count = 0;
+    }
+}
+
+const char *
+sc_options_form_profile_name(const struct sc_options_form *form) {
+    if (form->profile_mode == SC_PROFILE_SAVE_AS) {
+        return form->profile_name;
+    }
+    if (form->profile_count > 0 && form->profile_selected >= 0
+            && form->profile_selected < form->profile_count) {
+        return form->profiles[form->profile_selected];
+    }
+    return form->profile_name;
+}
+
+void
+sc_options_form_set_message(struct sc_options_form *form, const char *message) {
+    snprintf(form->help, sizeof(form->help), "%s", message ? message : "");
+}
+
+void
+sc_options_form_profile_close(struct sc_options_form *form) {
+    form->profile_mode = SC_PROFILE_IDLE;
+}
+
 static bool
 sc_field_visible(enum sc_field_id id) {
+    if (id == F_PROFILE) {
+        return false;
+    }
 #ifndef __linux__
     if (id == F_V4L2) {
         return false;
@@ -144,6 +204,27 @@ sc_field_visible(enum sc_field_id id) {
 static bool
 sc_field_focusable(enum sc_field_id id) {
     return sc_field_visible(id) && sc_fields[id].type != SC_FIELD_SECTION;
+}
+
+static bool
+sc_profile_name_append(char *text, size_t cap, int key) {
+    if (key == KEY_BACKSPACE || key == 127 || key == 8) {
+        return sc_text_backspace(text);
+    }
+    if (key < 32 || key > 126) {
+        return false;
+    }
+    unsigned char c = (unsigned char) key;
+    if (!isalnum(c) && c != '_' && c != '-') {
+        return false;
+    }
+    size_t len = strlen(text);
+    if (len + 1 >= cap) {
+        return false;
+    }
+    text[len] = (char) key;
+    text[len + 1] = '\0';
+    return true;
 }
 
 static int
@@ -304,6 +385,11 @@ sc_select_value(const struct sc_launch_opts *opts, enum sc_field_id id) {
 static enum sc_options_form_action
 sc_activate(struct sc_options_form *form, struct sc_launch_opts *opts) {
     enum sc_field_id id = (enum sc_field_id) form->focus;
+    if (id == F_PROFILE) {
+        form->profile_mode = SC_PROFILE_LOAD;
+        sc_options_form_profiles_reload(form);
+        return SC_OPTIONS_FORM_NONE;
+    }
     switch (sc_fields[id].type) {
         case SC_FIELD_CHECKBOX:
             sc_toggle_checkbox(opts, id);
@@ -332,6 +418,10 @@ sc_options_form_init(struct sc_options_form *form, int y, int x, int rows,
     form->cols = cols;
     form->focus = F_MAX_SIZE;
     form->scroll = 0;
+    form->profile_mode = SC_PROFILE_IDLE;
+    form->profile_count = 0;
+    form->profile_selected = 0;
+    form->profile_name[0] = '\0';
     form->help[0] = '\0';
     keypad(form->win, TRUE);
     return true;
@@ -343,6 +433,34 @@ sc_options_form_destroy(struct sc_options_form *form) {
         delwin(form->win);
         form->win = NULL;
     }
+    sc_free_profiles(form);
+}
+
+static enum sc_options_form_action
+sc_profile_key(struct sc_options_form *form, int key) {
+    if (form->profile_mode == SC_PROFILE_IDLE) {
+        return SC_OPTIONS_FORM_NONE;
+    }
+    if (key == 27) {
+        form->profile_mode = SC_PROFILE_IDLE;
+        return SC_OPTIONS_FORM_NONE;
+    }
+    if (form->profile_mode == SC_PROFILE_LOAD) {
+        if (key == KEY_UP && form->profile_selected > 0) --form->profile_selected;
+        else if (key == KEY_DOWN && form->profile_selected + 1 < form->profile_count) ++form->profile_selected;
+        else if (key == '\n' || key == '\r' || key == KEY_ENTER) return SC_OPTIONS_FORM_LOAD_PROFILE;
+        return SC_OPTIONS_FORM_NONE;
+    }
+    if (form->profile_mode == SC_PROFILE_SAVE_AS) {
+        if (key == '\n' || key == '\r' || key == KEY_ENTER) return SC_OPTIONS_FORM_SAVE_PROFILE;
+        (void) sc_profile_name_append(form->profile_name, sizeof(form->profile_name), key);
+        return SC_OPTIONS_FORM_NONE;
+    }
+    if (form->profile_mode == SC_PROFILE_DELETE_CONFIRM) {
+        if (key == 'y' || key == 'Y') return SC_OPTIONS_FORM_DELETE_PROFILE;
+        if (key != ERR) form->profile_mode = SC_PROFILE_IDLE;
+    }
+    return SC_OPTIONS_FORM_NONE;
 }
 
 bool
@@ -368,6 +486,9 @@ sc_options_form_handle_key(struct sc_options_form *form, int key,
         return SC_OPTIONS_FORM_NONE;
     }
     form->help[0] = '\0';
+    if (form->profile_mode != SC_PROFILE_IDLE) {
+        return sc_profile_key(form, key);
+    }
 
     switch (key) {
         case 27:
@@ -419,6 +540,28 @@ sc_options_form_handle_mouse(struct sc_options_form *form, const MEVENT *event,
     if (event->x <= form->x || event->x >= form->x + form->cols - 1) {
         return SC_OPTIONS_FORM_NONE;
     }
+    if (event->y == form->y + 1 && event->bstate & (BUTTON1_CLICKED | BUTTON1_DOUBLE_CLICKED | BUTTON1_PRESSED)) {
+        int rel = event->x - form->x;
+        if (rel >= 22 && rel < 32) {
+            form->profile_mode = SC_PROFILE_LOAD;
+            sc_options_form_profiles_reload(form);
+            return SC_OPTIONS_FORM_NONE;
+        }
+        if (rel >= 34 && rel < 47) {
+            form->profile_mode = SC_PROFILE_SAVE_AS;
+            form->profile_name[0] = '\0';
+            return SC_OPTIONS_FORM_NONE;
+        }
+        if (rel >= 49 && rel < 59) {
+            form->profile_mode = SC_PROFILE_DELETE_CONFIRM;
+            return SC_OPTIONS_FORM_NONE;
+        }
+    }
+    if (form->profile_mode == SC_PROFILE_LOAD && event->y > form->y + 1
+            && event->y < form->y + 2 + form->profile_count) {
+        form->profile_selected = event->y - form->y - 2;
+        return SC_OPTIONS_FORM_LOAD_PROFILE;
+    }
     int visible_row = event->y - form->y - 1;
     if (visible_row < 0 || visible_row >= form->rows - 2) {
         return SC_OPTIONS_FORM_NONE;
@@ -452,6 +595,28 @@ sc_options_form_draw(struct sc_options_form *form,
     mvwprintw(form->win, 0, 2, " Options ");
     sc_form_clamp_scroll(form);
 
+    mvwprintw(form->win, 1, 2, "%-18s", "Profile");
+    wattron(form->win, COLOR_PAIR(PAIR_BUTTON));
+    mvwprintw(form->win, 1, 22, "[Load v]");
+    mvwprintw(form->win, 1, 34, "[Save As]");
+    mvwprintw(form->win, 1, 49, "[Delete]");
+    wattroff(form->win, COLOR_PAIR(PAIR_BUTTON));
+    if (form->profile_mode == SC_PROFILE_SAVE_AS) {
+        mvwprintw(form->win, 2, 2, "Save profile name: %-32s", form->profile_name);
+    } else if (form->profile_mode == SC_PROFILE_DELETE_CONFIRM) {
+        mvwprintw(form->win, 2, 2, "Delete '%s'? [y/N]", sc_options_form_profile_name(form));
+    } else if (form->profile_mode == SC_PROFILE_LOAD) {
+        if (!form->profile_count) {
+            mvwprintw(form->win, 2, 2, "No saved profiles");
+        }
+        for (int i = 0; i < form->profile_count && i < 6; ++i) {
+            int pair = i == form->profile_selected ? PAIR_SELECTED : PAIR_NORMAL;
+            wattron(form->win, COLOR_PAIR(pair));
+            mvwprintw(form->win, 2 + i, 2, "%-32s", form->profiles[i]);
+            wattroff(form->win, COLOR_PAIR(pair));
+        }
+    }
+
     int visible = form->rows - 3;
     int logical_row = 0;
     int drawn = 0;
@@ -465,7 +630,10 @@ sc_options_form_draw(struct sc_options_form *form,
         }
 
         const struct sc_field_def *field = &sc_fields[i];
-        int y = drawn + 1;
+        int y = drawn + 4;
+        if (y >= form->rows - 1) {
+            break;
+        }
         if (field->type == SC_FIELD_SECTION) {
             wattron(form->win, COLOR_PAIR(PAIR_HEADER));
             mvwprintw(form->win, y, 2, "%-*s", form->cols - 4, field->label);

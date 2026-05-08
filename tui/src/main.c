@@ -19,6 +19,7 @@
 #endif
 
 #include "adb_list.h"
+#include "config.h"
 #include "launcher.h"
 #include "launch_opts.h"
 #include "ui/device_panel.h"
@@ -313,6 +314,39 @@ main(void) {
                         screen = SC_SCREEN_ERROR;
                         snprintf(status, sizeof(status), "launch failed");
                     }
+                }
+            } else if (action == SC_OPTIONS_FORM_SAVE_PROFILE) {
+                const char *name = sc_options_form_profile_name(&form);
+                if (!sc_config_profile_name_valid(name)) {
+                    sc_options_form_set_message(&form, "Invalid profile name: use a-z A-Z 0-9 _ - max 32");
+                } else if (sc_config_save(name, &launch_opts)) {
+                    sc_options_form_set_message(&form, "Profile saved");
+                    sc_options_form_profile_close(&form);
+                    sc_options_form_profiles_reload(&form);
+                } else {
+                    sc_options_form_set_message(&form, "Could not save profile");
+                }
+            } else if (action == SC_OPTIONS_FORM_LOAD_PROFILE) {
+                const char *name = sc_options_form_profile_name(&form);
+                char serial[sizeof(launch_opts.serial)];
+                snprintf(serial, sizeof(serial), "%s", launch_opts.serial);
+                struct sc_launch_opts loaded;
+                sc_launch_opts_init(&loaded, serial);
+                if (name[0] && sc_config_load(name, &loaded)) {
+                    launch_opts = loaded;
+                    sc_options_form_set_message(&form, "Profile loaded");
+                    sc_options_form_profile_close(&form);
+                } else {
+                    sc_options_form_set_message(&form, "Could not load profile");
+                }
+            } else if (action == SC_OPTIONS_FORM_DELETE_PROFILE) {
+                const char *name = sc_options_form_profile_name(&form);
+                if (name[0] && sc_config_delete(name)) {
+                    sc_options_form_set_message(&form, "Profile deleted");
+                    sc_options_form_profile_close(&form);
+                    sc_options_form_profiles_reload(&form);
+                } else {
+                    sc_options_form_set_message(&form, "Could not delete profile");
                 }
             }
         } else if (screen == SC_SCREEN_ERROR) {

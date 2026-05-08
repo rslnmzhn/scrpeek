@@ -17,9 +17,11 @@
 #ifndef SC_TUI_CONFIG_H
 #define SC_TUI_CONFIG_H
 
+#include "launch_opts.h"
+
 #include <stdbool.h>
 
-#include "launch_opts.h"
+#define SC_CONFIG_PROFILE_NAME_LEN 33
 
 bool
 sc_config_profile_name_valid(const char *name);
@@ -30,7 +32,10 @@ sc_config_save(const char *name, const struct sc_launch_opts *opts);
 bool
 sc_config_load(const char *name, struct sc_launch_opts *opts);
 
+int
+sc_config_list_profiles(char **names_out, int max);
+
 bool
-sc_config_profile_exists(const char *name);
+sc_config_delete(const char *name);
 
 #endif

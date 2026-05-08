@@ -26,6 +26,9 @@ enum sc_options_form_action {
     SC_OPTIONS_FORM_NONE,
     SC_OPTIONS_FORM_BACK,
     SC_OPTIONS_FORM_LAUNCH,
+    SC_OPTIONS_FORM_LOAD_PROFILE,
+    SC_OPTIONS_FORM_SAVE_PROFILE,
+    SC_OPTIONS_FORM_DELETE_PROFILE,
 };
 
 struct sc_options_form {
@@ -36,6 +39,11 @@ struct sc_options_form {
     int cols;
     int focus;
     int scroll;
+    int profile_mode;
+    int profile_count;
+    int profile_selected;
+    char *profiles[32];
+    char profile_name[33];
     char help[160];
 };
 
@@ -57,6 +65,18 @@ sc_options_form_handle_key(struct sc_options_form *form, int key,
 enum sc_options_form_action
 sc_options_form_handle_mouse(struct sc_options_form *form, const MEVENT *event,
                              struct sc_launch_opts *opts);
+
+void
+sc_options_form_profiles_reload(struct sc_options_form *form);
+
+const char *
+sc_options_form_profile_name(const struct sc_options_form *form);
+
+void
+sc_options_form_set_message(struct sc_options_form *form, const char *message);
+
+void
+sc_options_form_profile_close(struct sc_options_form *form);
 
 void
 sc_options_form_draw(struct sc_options_form *form,

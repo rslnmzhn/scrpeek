@@ -25,6 +25,7 @@ endif
 executable('scrcpy-tui',
            [
                'src/adb_list.c',
+               'src/config.c',
                'src/launcher.c',
                'src/launch_opts.c',
                'src/main.c',
