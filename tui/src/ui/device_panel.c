@@ -16,27 +16,30 @@
 
 #include "ui/device_panel.h"
 
-#include <stdbool.h>
 #include <stdio.h>
-#include <string.h>
 
-#include "ui/layout.h"
+static int
+sc_device_panel_visible_rows(const struct sc_device_panel *panel) {
+    return panel->rows > 2 ? panel->rows - 2 : 0;
+}
 
 static void
 sc_device_panel_clamp(struct sc_device_panel *panel,
                       const struct sc_device_list *devices) {
-    if (!devices->count) {
+    if (devices->count <= 0) {
         panel->selected = 0;
         panel->scroll = 0;
         return;
     }
 
-    if (panel->selected >= devices->count) {
+    if (panel->selected < 0) {
+        panel->selected = 0;
+    } else if (panel->selected >= devices->count) {
         panel->selected = devices->count - 1;
     }
 
-    size_t visible = panel->rows > 2 ? (size_t) panel->rows - 2 : 0;
-    if (!visible) {
+    int visible = sc_device_panel_visible_rows(panel);
+    if (visible <= 0) {
         panel->scroll = panel->selected;
         return;
     }
@@ -47,7 +50,9 @@ sc_device_panel_clamp(struct sc_device_panel *panel,
         panel->scroll = panel->selected - visible + 1;
     }
 
-    if (panel->scroll >= devices->count) {
+    if (panel->scroll < 0) {
+        panel->scroll = 0;
+    } else if (panel->scroll >= devices->count) {
         panel->scroll = devices->count - 1;
     }
 }
@@ -80,7 +85,7 @@ sc_device_panel_destroy(struct sc_device_panel *panel) {
 
 bool
 sc_device_panel_resize(struct sc_device_panel *panel, int y, int x, int rows,
-                       int cols) {
+                       int cols, const struct sc_device_list *devices) {
     if (wresize(panel->win, rows, cols) == ERR) {
         return false;
     }
@@ -92,34 +97,79 @@ sc_device_panel_resize(struct sc_device_panel *panel, int y, int x, int rows,
     panel->x = x;
     panel->rows = rows;
     panel->cols = cols;
+    sc_device_panel_clamp(panel, devices);
+    redrawwin(panel->win);
+    wrefresh(panel->win);
     return true;
 }
 
-void
+enum sc_device_panel_action
 sc_device_panel_handle_key(struct sc_device_panel *panel, int key,
                            const struct sc_device_list *devices) {
-    if (!devices->count) {
+    if (devices->count <= 0) {
         panel->selected = 0;
         panel->scroll = 0;
-        return;
+        return SC_DEVICE_PANEL_NONE;
     }
 
     switch (key) {
         case KEY_UP:
-            if (panel->selected > 0) {
-                --panel->selected;
-            }
+            --panel->selected;
             break;
         case KEY_DOWN:
-            if (panel->selected + 1 < devices->count) {
-                ++panel->selected;
-            }
+            ++panel->selected;
             break;
+        case KEY_PPAGE:
+            panel->selected -= sc_device_panel_visible_rows(panel);
+            break;
+        case KEY_NPAGE:
+            panel->selected += sc_device_panel_visible_rows(panel);
+            break;
+        case '\n':
+        case '\r':
+        case KEY_ENTER:
+            return SC_DEVICE_PANEL_ACTIVATE;
         default:
-            break;
+            return SC_DEVICE_PANEL_NONE;
     }
 
     sc_device_panel_clamp(panel, devices);
+    return SC_DEVICE_PANEL_SELECTED;
+}
+
+enum sc_device_panel_action
+sc_device_panel_handle_mouse(struct sc_device_panel *panel, const MEVENT *event,
+                             const struct sc_device_list *devices) {
+    if (devices->count <= 0) {
+        return SC_DEVICE_PANEL_NONE;
+    }
+
+    if (event->x <= panel->x || event->x >= panel->x + panel->cols - 1) {
+        return SC_DEVICE_PANEL_NONE;
+    }
+
+    int first_row_y = panel->y + 1;
+    int row = event->y - first_row_y;
+    if (row < 0 || row >= sc_device_panel_visible_rows(panel)) {
+        return SC_DEVICE_PANEL_NONE;
+    }
+
+    int index = panel->scroll + row;
+    if (index < 0 || index >= devices->count) {
+        return SC_DEVICE_PANEL_NONE;
+    }
+
+    panel->selected = index;
+    sc_device_panel_clamp(panel, devices);
+
+    if (event->bstate & BUTTON1_DOUBLE_CLICKED) {
+        return SC_DEVICE_PANEL_ACTIVATE;
+    }
+    if (event->bstate & (BUTTON1_CLICKED | BUTTON1_PRESSED | BUTTON1_RELEASED)) {
+        return SC_DEVICE_PANEL_SELECTED;
+    }
+
+    return SC_DEVICE_PANEL_NONE;
 }
 
 void
@@ -132,22 +182,24 @@ sc_device_panel_draw(struct sc_device_panel *panel,
 
     sc_device_panel_clamp(panel, devices);
 
-    int visible = panel->rows - 2;
+    int visible = sc_device_panel_visible_rows(panel);
     if (visible <= 0 || panel->cols <= 2) {
         wattroff(panel->win, COLOR_PAIR(PAIR_NORMAL));
         wnoutrefresh(panel->win);
         return;
     }
 
-    if (!devices->count) {
+    if (devices->count <= 0) {
         mvwprintw(panel->win, 1, 2, "No devices connected");
         wattroff(panel->win, COLOR_PAIR(PAIR_NORMAL));
         wnoutrefresh(panel->win);
         return;
     }
 
-    for (int row = 0; row < visible; ++row) {
-        size_t index = panel->scroll + (size_t) row;
+    mvwprintw(panel->win, 1, 2, "%-28s %-24s %-12s", "Serial", "Model", "State");
+
+    for (int row = 1; row < visible; ++row) {
+        int index = panel->scroll + row - 1;
         if (index >= devices->count) {
             break;
         }
@@ -157,11 +209,9 @@ sc_device_panel_draw(struct sc_device_panel *panel,
         int pair = selected ? PAIR_SELECTED : PAIR_NORMAL;
         wattron(panel->win, COLOR_PAIR(pair));
 
-        char line[512];
+        char line[256];
         int written = snprintf(line, sizeof(line), "%-28s %-24s %-12s",
-                               device->serial,
-                               device->model ? device->model : "",
-                               device->state);
+                               device->serial, device->model, device->state);
         if (written < 0) {
             line[0] = '\0';
         }
@@ -178,7 +228,7 @@ sc_device_panel_draw(struct sc_device_panel *panel,
 const struct sc_device *
 sc_device_panel_selected(const struct sc_device_panel *panel,
                          const struct sc_device_list *devices) {
-    if (!devices->count || panel->selected >= devices->count) {
+    if (devices->count <= 0 || panel->selected < 0 || panel->selected >= devices->count) {
         return NULL;
     }
 

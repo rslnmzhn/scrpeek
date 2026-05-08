@@ -18,9 +18,12 @@
 #define SC_TUI_LAYOUT_H
 
 #ifdef _WIN32
+# define NCURSES_MOUSE_VERSION 1
 # include <pdcurses.h>
+# define SC_TUI_MOUSE_MASK ALL_MOUSE_EVENTS
 #else
 # include <curses.h>
+# define SC_TUI_MOUSE_MASK (ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION)
 #endif
 
 #define SC_TUI_MIN_COLS 80
@@ -34,6 +37,7 @@ enum sc_tui_color_pair {
     PAIR_SELECTED,
     PAIR_NORMAL,
     PAIR_STATUS,
+    PAIR_BUTTON,
 };
 
 #endif

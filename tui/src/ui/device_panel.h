@@ -18,10 +18,15 @@
 #define SC_TUI_DEVICE_PANEL_H
 
 #include <stdbool.h>
-#include <stddef.h>
 
 #include "adb_list.h"
 #include "ui/layout.h"
+
+enum sc_device_panel_action {
+    SC_DEVICE_PANEL_NONE,
+    SC_DEVICE_PANEL_SELECTED,
+    SC_DEVICE_PANEL_ACTIVATE,
+};
 
 struct sc_device_panel {
     WINDOW *win;
@@ -29,8 +34,8 @@ struct sc_device_panel {
     int x;
     int rows;
     int cols;
-    size_t selected;
-    size_t scroll;
+    int selected;
+    int scroll;
 };
 
 bool
@@ -42,11 +47,15 @@ sc_device_panel_destroy(struct sc_device_panel *panel);
 
 bool
 sc_device_panel_resize(struct sc_device_panel *panel, int y, int x, int rows,
-                       int cols);
+                       int cols, const struct sc_device_list *devices);
 
-void
+enum sc_device_panel_action
 sc_device_panel_handle_key(struct sc_device_panel *panel, int key,
                            const struct sc_device_list *devices);
+
+enum sc_device_panel_action
+sc_device_panel_handle_mouse(struct sc_device_panel *panel, const MEVENT *event,
+                             const struct sc_device_list *devices);
 
 void
 sc_device_panel_draw(struct sc_device_panel *panel,
