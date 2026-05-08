@@ -27,6 +27,8 @@
 #include <string.h>
 
 #ifdef _WIN32
+# include <windows.h>
+# include <shlwapi.h>
 # define SC_POPEN _popen
 # define SC_PCLOSE _pclose
 # define SC_ADB_EXE "adb.exe"
@@ -38,6 +40,65 @@
 
 #define SC_ADB_HEADER "List of devices attached"
 #define SC_ADB_HEADER_LEN (sizeof(SC_ADB_HEADER) - 1)
+
+#ifdef _WIN32
+static char *
+sc_strdup_wide_path(const wchar_t *path) {
+    int len = WideCharToMultiByte(CP_UTF8, 0, path, -1, NULL, 0, NULL, NULL);
+    if (len <= 0) {
+        return NULL;
+    }
+
+    char *utf8 = malloc((size_t) len);
+    if (!utf8) {
+        return NULL;
+    }
+
+    if (!WideCharToMultiByte(CP_UTF8, 0, path, -1, utf8, len, NULL, NULL)) {
+        free(utf8);
+        return NULL;
+    }
+
+    return utf8;
+}
+
+static char *
+sc_find_bundled_adb(void) {
+    wchar_t path[MAX_PATH];
+    DWORD len = GetModuleFileNameW(NULL, path, ARRAYSIZE(path));
+    if (!len || len >= ARRAYSIZE(path)) {
+        return NULL;
+    }
+
+    if (!PathRemoveFileSpecW(path)) {
+        return NULL;
+    }
+
+    if (!PathAppendW(path, L"adb.exe") || !PathFileExistsW(path)) {
+        return NULL;
+    }
+
+    return sc_strdup_wide_path(path);
+}
+
+static char *
+sc_find_path_adb(void) {
+    wchar_t path[MAX_PATH];
+    DWORD len = SearchPathW(NULL, L"adb.exe", NULL, ARRAYSIZE(path), path, NULL);
+    if (!len || len >= ARRAYSIZE(path)) {
+        return NULL;
+    }
+
+    return sc_strdup_wide_path(path);
+}
+
+static void
+sc_adb_not_found(void) {
+    fprintf(stderr, "adb.exe not found. Download Android Platform Tools: "
+            "https://developer.android.com/tools/releases/platform-tools\n");
+    exit(1);
+}
+#endif
 
 static char *
 sc_strdup(const char *s) {
@@ -51,12 +112,44 @@ sc_strdup(const char *s) {
 
 static char *
 sc_find_adb(void) {
+#ifdef _WIN32
+    const char *adb = getenv("SCRCPY_ADB");
+    if (adb && adb[0]) {
+        if (getenv("SC_DEBUG")) {
+            fprintf(stderr, "Using SCRCPY_ADB=%s\n", adb);
+        }
+        return sc_strdup(adb);
+    }
+
+    char *bundled = sc_find_bundled_adb();
+    if (bundled) {
+        if (getenv("SC_DEBUG")) {
+            fprintf(stderr, "Using bundled adb.exe at %s\n", bundled);
+        }
+        return bundled;
+    }
+
+    char *path_adb = sc_find_path_adb();
+    if (path_adb) {
+        if (getenv("SC_DEBUG")) {
+            fprintf(stderr, "Using adb.exe from PATH at %s\n", path_adb);
+        }
+        return path_adb;
+    }
+
+    sc_adb_not_found();
+    return NULL;
+#else
     const char *adb = getenv("ADB");
     if (adb && adb[0]) {
         return sc_strdup(adb);
     }
 
+    if (getenv("SC_DEBUG")) {
+        fprintf(stderr, "Using %s from PATH\n", SC_ADB_EXE);
+    }
     return sc_strdup(SC_ADB_EXE);
+#endif
 }
 
 static bool

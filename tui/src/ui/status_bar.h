@@ -17,10 +17,10 @@
 #ifndef SC_TUI_STATUS_BAR_H
 #define SC_TUI_STATUS_BAR_H
 
-#include <curses.h>
 #include <stdbool.h>
 
 #include "launcher.h"
+#include "ui/layout.h"
 
 struct sc_status_bar {
     WINDOW *win;

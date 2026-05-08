@@ -8,9 +8,9 @@ Based on [scrcpy](https://github.com/Genymobile/scrcpy), created by Romain Vimon
 
 ## Requirements
 
-- `adb` on `PATH`
+- `adb` on `PATH` for Linux/macOS; Windows bundles `adb.exe` automatically
 - `scrcpy` installed separately
-- `ncurses`
+- `ncurses` on Linux/macOS or PDCurses on Windows
 
 ## Build
 
@@ -19,6 +19,18 @@ sh tui/scripts/bootstrap.sh
 meson setup build
 ninja -C build
 ```
+
+### Windows (native, MSYS2)
+
+1. Install MSYS2: https://www.msys2.org
+2. Run from MSYS2 MinGW64 shell:
+
+   ```sh
+   bash tui/scripts/bootstrap-msys2.sh
+   meson setup build --wipe && ninja -C build
+   ```
+
+3. `adb.exe` is bundled automatically by `build-windows.bat`.
 
 ## Usage
 

@@ -17,11 +17,11 @@
 #ifndef SC_TUI_OPTIONS_FORM_H
 #define SC_TUI_OPTIONS_FORM_H
 
-#include <curses.h>
 #include <stdbool.h>
 #include <stddef.h>
 
 #include "launch_opts.h"
+#include "ui/layout.h"
 
 enum sc_options_form_action {
     SC_OPTIONS_FORM_NONE,

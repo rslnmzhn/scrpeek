@@ -5,6 +5,13 @@ has_cmd() {
     command -v "$1" >/dev/null 2>&1
 }
 
+case "$(uname -s 2>/dev/null || echo unknown)" in
+    *MINGW*|*CYGWIN*)
+        echo "Use bootstrap-msys2.sh or build-windows.bat instead" >&2
+        exit 1
+        ;;
+esac
+
 install_apt() {
     sudo apt-get update
     sudo apt-get install -y ninja-build meson libncurses-dev

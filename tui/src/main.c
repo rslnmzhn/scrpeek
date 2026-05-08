@@ -18,13 +18,15 @@
 # define _POSIX_C_SOURCE 200809L
 #endif
 
-#include <curses.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#ifdef _WIN32
+# include <windows.h>
+#endif
 #ifndef _WIN32
 # include <poll.h>
 #endif
@@ -73,12 +75,16 @@ sc_signal_handler(int sig) {
 
 static long
 sc_monotonic_ms(void) {
+#ifdef _WIN32
+    return (long) GetTickCount64();
+#else
     struct timespec ts;
     if (timespec_get(&ts, TIME_UTC) != TIME_UTC) {
         return 0;
     }
 
     return ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
+#endif
 }
 
 static void

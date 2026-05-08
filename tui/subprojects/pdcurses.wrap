@@ -1,0 +1,6 @@
+[wrap-file]
+directory = PDCursesMod-4.5.4
+source_url = https://github.com/Bill-Gray/PDCursesMod/archive/refs/tags/v4.5.4.tar.gz
+source_filename = PDCursesMod-4.5.4.tar.gz
+source_hash = skip
+patch_directory = pdcurses

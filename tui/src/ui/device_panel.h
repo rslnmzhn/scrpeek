@@ -17,11 +17,11 @@
 #ifndef SC_TUI_DEVICE_PANEL_H
 #define SC_TUI_DEVICE_PANEL_H
 
-#include <curses.h>
 #include <stdbool.h>
 #include <stddef.h>
 
 #include "adb_list.h"
+#include "ui/layout.h"
 
 struct sc_device_panel {
     WINDOW *win;

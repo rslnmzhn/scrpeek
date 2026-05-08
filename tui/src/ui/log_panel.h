@@ -17,9 +17,10 @@
 #ifndef SC_TUI_LOG_PANEL_H
 #define SC_TUI_LOG_PANEL_H
 
-#include <curses.h>
 #include <stdbool.h>
 #include <stddef.h>
+
+#include "ui/layout.h"
 
 #define SC_LOG_PANEL_MAX_LINES 1000
 #define SC_LOG_PANEL_LINE_LEN 512

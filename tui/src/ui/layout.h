@@ -17,6 +17,12 @@
 #ifndef SC_TUI_LAYOUT_H
 #define SC_TUI_LAYOUT_H
 
+#ifdef _WIN32
+# include <pdcurses.h>
+#else
+# include <curses.h>
+#endif
+
 #define SC_TUI_MIN_COLS 80
 #define SC_TUI_MIN_ROWS 24
 
