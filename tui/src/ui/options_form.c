@@ -7,6 +7,9 @@
 #include "ui/layout.h"
 
 enum sc_options_field {
+    SC_FIELD_PROFILE_NAME,
+    SC_FIELD_SAVE_PROFILE,
+    SC_FIELD_LOAD_PROFILE,
     SC_FIELD_MAX_SIZE,
     SC_FIELD_MAX_FPS,
     SC_FIELD_VIDEO_CODEC,
@@ -24,7 +27,7 @@ static const char *const sc_video_codec_names[] = {"h264", "h265", "av1"};
 static const char *const sc_connection_names[] = {"USB", "TCPIP"};
 static const char *const sc_keyboard_mode_names[] = {"disabled", "sdk", "uhid"};
 
-static void
+void
 sc_options_form_set_error(struct sc_options_form *form, const char *error) {
     snprintf(form->error, sizeof(form->error), "%s", error ? error : "");
 }
@@ -60,6 +63,21 @@ sc_numeric_key(char *text, size_t cap, int key) {
     }
 
     if (!isdigit((unsigned char) key)) {
+        return false;
+    }
+
+    return sc_text_append(text, cap, key);
+}
+
+static bool
+sc_profile_key(char *text, size_t cap, int key) {
+    if (key == KEY_BACKSPACE || key == 127 || key == 8) {
+        (void) sc_text_backspace(text);
+        return true;
+    }
+
+    unsigned char c = (unsigned char) key;
+    if (!isalnum(c) && c != '-' && c != '_') {
         return false;
     }
 
@@ -140,6 +158,7 @@ sc_options_form_init(struct sc_options_form *form, int y, int x, int rows,
     form->cols = cols;
     form->field = 0;
     form->error[0] = '\0';
+    form->profile_name[0] = '\0';
     keypad(form->win, TRUE);
     return true;
 }
@@ -172,6 +191,10 @@ sc_options_form_resize(struct sc_options_form *form, int y, int x, int rows,
 enum sc_options_form_action
 sc_options_form_handle_key(struct sc_options_form *form, int key,
                            struct sc_launch_opts *opts) {
+    if (key == ERR) {
+        return SC_OPTIONS_FORM_NONE;
+    }
+
     sc_options_form_set_error(form, NULL);
 
     switch (key) {
@@ -196,6 +219,12 @@ sc_options_form_handle_key(struct sc_options_form *form, int key,
             if (form->field == SC_FIELD_LAUNCH) {
                 return SC_OPTIONS_FORM_LAUNCH;
             }
+            if (form->field == SC_FIELD_SAVE_PROFILE) {
+                return SC_OPTIONS_FORM_SAVE_PROFILE;
+            }
+            if (form->field == SC_FIELD_LOAD_PROFILE) {
+                return SC_OPTIONS_FORM_LOAD_PROFILE;
+            }
             sc_options_form_toggle(form, opts);
             return SC_OPTIONS_FORM_NONE;
         default:
@@ -204,6 +233,10 @@ sc_options_form_handle_key(struct sc_options_form *form, int key,
 
     bool accepted = true;
     switch (form->field) {
+        case SC_FIELD_PROFILE_NAME:
+            accepted = sc_profile_key(form->profile_name,
+                                      sizeof(form->profile_name), key);
+            break;
         case SC_FIELD_MAX_SIZE:
             accepted = sc_numeric_key(opts->max_size, sizeof(opts->max_size), key);
             break;
@@ -222,7 +255,9 @@ sc_options_form_handle_key(struct sc_options_form *form, int key,
     }
 
     if (!accepted) {
-        sc_options_form_set_error(form, "invalid input for field");
+        sc_options_form_set_error(form, form->field == SC_FIELD_PROFILE_NAME
+                                  ? "profile: use letters, numbers, dash or underscore"
+                                  : "invalid input for field");
     }
     return SC_OPTIONS_FORM_NONE;
 }
@@ -235,7 +270,7 @@ sc_options_form_draw(struct sc_options_form *form,
     box(form->win, 0, 0);
     mvwprintw(form->win, 0, 2, " Options ");
 
-    if (form->cols < 30 || form->rows < 14) {
+    if (form->cols < 30 || form->rows < 17) {
         mvwprintw(form->win, 1, 2, "Panel too small");
         wattroff(form->win, COLOR_PAIR(PAIR_NORMAL));
         wnoutrefresh(form->win);
@@ -243,25 +278,29 @@ sc_options_form_draw(struct sc_options_form *form,
     }
 
     char value[320];
+    sc_options_form_draw_field(form, 2, SC_FIELD_PROFILE_NAME, "Profile",
+                               form->profile_name[0] ? form->profile_name : "-");
+    sc_options_form_draw_field(form, 3, SC_FIELD_SAVE_PROFILE, "", "[Save As...] ");
+    sc_options_form_draw_field(form, 4, SC_FIELD_LOAD_PROFILE, "", "[Load]");
     snprintf(value, sizeof(value), "%s", opts->max_size[0] ? opts->max_size : "0");
-    sc_options_form_draw_field(form, 2, SC_FIELD_MAX_SIZE, "Max size", value);
+    sc_options_form_draw_field(form, 6, SC_FIELD_MAX_SIZE, "Max size", value);
     snprintf(value, sizeof(value), "%s", opts->max_fps[0] ? opts->max_fps : "0");
-    sc_options_form_draw_field(form, 3, SC_FIELD_MAX_FPS, "Max fps", value);
-    sc_options_form_draw_field(form, 4, SC_FIELD_VIDEO_CODEC, "Video codec",
+    sc_options_form_draw_field(form, 7, SC_FIELD_MAX_FPS, "Max fps", value);
+    sc_options_form_draw_field(form, 8, SC_FIELD_VIDEO_CODEC, "Video codec",
                                sc_video_codec_names[opts->video_codec]);
-    sc_options_form_draw_field(form, 5, SC_FIELD_NO_AUDIO, "No audio",
+    sc_options_form_draw_field(form, 9, SC_FIELD_NO_AUDIO, "No audio",
                                opts->no_audio ? "[x]" : "[ ]");
-    sc_options_form_draw_field(form, 6, SC_FIELD_RECORD_PATH, "Record to file",
+    sc_options_form_draw_field(form, 10, SC_FIELD_RECORD_PATH, "Record to file",
                                opts->record_path[0] ? opts->record_path : "-");
-    sc_options_form_draw_field(form, 7, SC_FIELD_CONNECTION, "Connection",
+    sc_options_form_draw_field(form, 11, SC_FIELD_CONNECTION, "Connection",
                                sc_connection_names[opts->connection]);
-    sc_options_form_draw_field(form, 8, SC_FIELD_TCPIP_ADDR, "IP:port",
+    sc_options_form_draw_field(form, 12, SC_FIELD_TCPIP_ADDR, "IP:port",
                                opts->tcpip_addr[0] ? opts->tcpip_addr : "-");
-    sc_options_form_draw_field(form, 9, SC_FIELD_KEYBOARD_MODE, "Keyboard mode",
+    sc_options_form_draw_field(form, 13, SC_FIELD_KEYBOARD_MODE, "Keyboard mode",
                                sc_keyboard_mode_names[opts->keyboard_mode]);
-    sc_options_form_draw_field(form, 10, SC_FIELD_TURN_SCREEN_OFF,
+    sc_options_form_draw_field(form, 14, SC_FIELD_TURN_SCREEN_OFF,
                                "Turn screen off", opts->turn_screen_off ? "[x]" : "[ ]");
-    sc_options_form_draw_field(form, 12, SC_FIELD_LAUNCH, "", "Launch");
+    sc_options_form_draw_field(form, 16, SC_FIELD_LAUNCH, "", "Launch");
 
     if (form->error[0]) {
         wattron(form->win, COLOR_PAIR(PAIR_STATUS));

@@ -14,6 +14,7 @@
 #endif
 
 #include "adb_list.h"
+#include "config.h"
 #include "launcher.h"
 #include "launch_opts.h"
 #include "ui/device_panel.h"
@@ -352,6 +353,30 @@ main(void) {
                     screen = SC_TUI_SCREEN_LOG;
                 } else {
                     snprintf(status, sizeof(status), "could not launch scrcpy");
+                }
+            } else if (action == SC_OPTIONS_FORM_SAVE_PROFILE) {
+                if (!sc_config_profile_name_valid(form.profile_name)) {
+                    sc_options_form_set_error(&form, "invalid profile name");
+                } else if (sc_config_save(form.profile_name, &launch_opts)) {
+                    snprintf(status, sizeof(status), "saved profile %s",
+                             form.profile_name);
+                } else {
+                    sc_options_form_set_error(&form, "could not save profile");
+                }
+            } else if (action == SC_OPTIONS_FORM_LOAD_PROFILE) {
+                const char *serial = launch_opts.serial;
+                struct sc_launch_opts loaded;
+                sc_launch_opts_init(&loaded, serial);
+                if (!sc_config_profile_name_valid(form.profile_name)) {
+                    sc_options_form_set_error(&form, "invalid profile name");
+                } else if (!sc_config_profile_exists(form.profile_name)) {
+                    sc_options_form_set_error(&form, "profile not found");
+                } else if (sc_config_load(form.profile_name, &loaded)) {
+                    launch_opts = loaded;
+                    snprintf(status, sizeof(status), "loaded profile %s",
+                             form.profile_name);
+                } else {
+                    sc_options_form_set_error(&form, "could not load profile");
                 }
             } else if (screen == SC_TUI_SCREEN_LOG) {
                 if (launcher_started && launcher.running) {
