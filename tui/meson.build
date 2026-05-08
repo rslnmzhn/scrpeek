@@ -9,8 +9,10 @@ tui_ncurses_dep = dependency('ncurses')
 
 tui_src = [
     'src/adb_list.c',
+    'src/launch_opts.c',
     'src/main.c',
     'src/ui/device_panel.c',
+    'src/ui/options_form.c',
 ]
 
 executable('scrcpy-tui', tui_src,
@@ -26,3 +28,13 @@ tui_adb_test = executable('scrcpy-tui-adb-test',
                           ],
                           include_directories: tui_src_dir,
                           c_args: tui_c_args)
+
+tui_opts_argv_test = executable('scrcpy-tui-test-opts-argv',
+                                [
+                                    'test/test_opts_argv.c',
+                                    'src/launch_opts.c',
+                                ],
+                                include_directories: tui_src_dir,
+                                c_args: tui_c_args)
+
+test('scrcpy-tui-test-opts-argv', tui_opts_argv_test)

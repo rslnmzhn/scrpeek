@@ -158,3 +158,13 @@ sc_device_panel_draw(struct sc_device_panel *panel,
     wattroff(panel->win, COLOR_PAIR(PAIR_NORMAL));
     wnoutrefresh(panel->win);
 }
+
+const struct sc_device *
+sc_device_panel_selected(const struct sc_device_panel *panel,
+                         const struct sc_device_list *devices) {
+    if (!devices->count || panel->selected >= devices->count) {
+        return NULL;
+    }
+
+    return &devices->devices[panel->selected];
+}
