@@ -16,3 +16,7 @@ endif
 if get_option('compile_server')
     subdir('server')
 endif
+
+if get_option('compile_tui')
+    subdir('tui')
+endif
