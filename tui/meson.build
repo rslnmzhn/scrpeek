@@ -9,10 +9,13 @@ tui_ncurses_dep = dependency('ncurses')
 
 tui_src = [
     'src/adb_list.c',
+    'src/launcher.c',
     'src/launch_opts.c',
     'src/main.c',
     'src/ui/device_panel.c',
+    'src/ui/log_panel.c',
     'src/ui/options_form.c',
+    'src/ui/status_bar.c',
 ]
 
 executable('scrcpy-tui', tui_src,
