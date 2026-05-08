@@ -19,8 +19,10 @@
 #endif
 
 #include "adb_list.h"
+#include "launcher.h"
 #include "launch_opts.h"
 #include "ui/device_panel.h"
+#include "ui/error_panel.h"
 #include "ui/layout.h"
 #include "ui/options_form.h"
 
@@ -40,6 +42,7 @@
 enum sc_screen {
     SC_SCREEN_DEVICES,
     SC_SCREEN_OPTIONS,
+    SC_SCREEN_ERROR,
 };
 
 static volatile sig_atomic_t sc_resize_requested;
@@ -87,6 +90,17 @@ sc_init_colors(void) {
     init_pair(PAIR_NORMAL, COLOR_WHITE, COLOR_BLACK);
     init_pair(PAIR_STATUS, COLOR_YELLOW, COLOR_BLACK);
     init_pair(PAIR_BUTTON, COLOR_BLACK, COLOR_GREEN);
+}
+
+static void
+sc_init_curses_modes(void) {
+    cbreak();
+    noecho();
+    keypad(stdscr, TRUE);
+    curs_set(0);
+    timeout(SC_INPUT_TIMEOUT_MS);
+    mousemask(SC_TUI_MOUSE_MASK, NULL);
+    sc_init_colors();
 }
 
 static void
@@ -150,19 +164,32 @@ sc_resize_options_form(struct sc_options_form *form, int rows, int cols) {
     return sc_options_form_resize(form, SC_TUI_HEADER_HEIGHT, 0, form_rows, cols);
 }
 
+static bool
+sc_restart_curses(void) {
+    WINDOW *std = initscr();
+    if (!std) {
+        return false;
+    }
+    sc_init_curses_modes();
+    return true;
+}
+
 int
 main(void) {
     int ret = 1;
     bool curses_started = false;
     bool panel_started = false;
     bool form_started = false;
+    bool error_started = false;
     struct sc_device_panel panel;
     struct sc_options_form form;
+    struct sc_error_panel error_panel;
     struct sc_device_list devices = {0};
     struct sc_launch_opts launch_opts;
     const char *launch_argv[96];
     enum sc_screen screen = SC_SCREEN_DEVICES;
     char status[80] = "starting";
+    char launch_error[512] = "";
     int rows = 0;
     int cols = 0;
 
@@ -178,14 +205,7 @@ main(void) {
     }
     curses_started = true;
 
-    cbreak();
-    noecho();
-    keypad(stdscr, TRUE);
-    curs_set(0);
-    timeout(SC_INPUT_TIMEOUT_MS);
-    mousemask(SC_TUI_MOUSE_MASK, NULL);
-
-    sc_init_colors();
+    sc_init_curses_modes();
 
     getmaxyx(stdscr, rows, cols);
     if (!sc_device_panel_init(&panel, SC_TUI_HEADER_HEIGHT, 0,
@@ -200,6 +220,10 @@ main(void) {
         goto cleanup;
     }
     form_started = true;
+    if (!sc_error_panel_init(&error_panel, rows, cols)) {
+        goto cleanup;
+    }
+    error_started = true;
 
     (void) sc_refresh_devices(&devices, status, sizeof(status));
     long next_refresh = sc_monotonic_ms() + SC_REFRESH_INTERVAL_MS;
@@ -220,6 +244,9 @@ main(void) {
                 goto cleanup;
             }
             if (!too_small && !sc_resize_options_form(&form, rows, cols)) {
+                goto cleanup;
+            }
+            if (!too_small && !sc_error_panel_resize(&error_panel, rows, cols)) {
                 goto cleanup;
             }
             redrawwin(stdscr);
@@ -273,13 +300,34 @@ main(void) {
                 if (argc < 0) {
                     snprintf(status, sizeof(status), "argv too small");
                 } else {
-                    fprintf(stderr, "scrcpy argv:");
-                    for (int i = 0; i < argc; ++i) {
-                        fprintf(stderr, " %s", launch_argv[i]);
+                    if (sc_launch(launch_argv, launch_error, sizeof(launch_error)) < 0) {
+                        if (!sc_restart_curses()) {
+                            goto cleanup;
+                        }
+                        getmaxyx(stdscr, rows, cols);
+                        if (!sc_resize_device_panel(&panel, rows, cols, &devices)
+                                || !sc_resize_options_form(&form, rows, cols)
+                                || !sc_error_panel_resize(&error_panel, rows, cols)) {
+                            goto cleanup;
+                        }
+                        screen = SC_SCREEN_ERROR;
+                        snprintf(status, sizeof(status), "launch failed");
                     }
-                    fprintf(stderr, "\n");
-                    snprintf(status, sizeof(status), "launch argv built (%d args)", argc);
                 }
+            }
+        } else if (screen == SC_SCREEN_ERROR) {
+            bool dismiss = false;
+            if (key == KEY_MOUSE) {
+                MEVENT event;
+                if (getmouse(&event) == OK) {
+                    dismiss = sc_error_panel_handle_mouse(&error_panel, &event);
+                }
+            } else if (key != ERR) {
+                dismiss = sc_error_panel_handle_key(key);
+            }
+            if (dismiss) {
+                screen = SC_SCREEN_OPTIONS;
+                snprintf(status, sizeof(status), "options");
             }
         }
 
@@ -294,13 +342,18 @@ main(void) {
         if (!sc_resize_options_form(&form, rows, cols)) {
             goto cleanup;
         }
+        if (!sc_error_panel_resize(&error_panel, rows, cols)) {
+            goto cleanup;
+        }
 
         werase(stdscr);
         sc_draw_header(stdscr, cols);
         if (screen == SC_SCREEN_DEVICES) {
             sc_device_panel_draw(&panel, &devices);
-        } else {
+        } else if (screen == SC_SCREEN_OPTIONS) {
             sc_options_form_draw(&form, &launch_opts);
+        } else {
+            sc_error_panel_draw(&error_panel, "Launch failed", launch_error);
         }
         sc_draw_footer(stdscr, rows, cols, status);
         wnoutrefresh(stdscr);
@@ -316,6 +369,9 @@ cleanup:
     }
     if (form_started) {
         sc_options_form_destroy(&form);
+    }
+    if (error_started) {
+        sc_error_panel_destroy(&error_panel);
     }
     if (curses_started) {
         endwin();

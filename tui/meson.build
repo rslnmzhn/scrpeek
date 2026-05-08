@@ -25,9 +25,11 @@ endif
 executable('scrcpy-tui',
            [
                'src/adb_list.c',
+               'src/launcher.c',
                'src/launch_opts.c',
                'src/main.c',
                'src/ui/device_panel.c',
+               'src/ui/error_panel.c',
                'src/ui/options_form.c',
            ],
            include_directories: tui_src_dir,
