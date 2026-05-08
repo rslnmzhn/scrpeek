@@ -19,8 +19,10 @@
 #endif
 
 #include "adb_list.h"
+#include "launch_opts.h"
 #include "ui/device_panel.h"
 #include "ui/layout.h"
+#include "ui/options_form.h"
 
 #include <signal.h>
 #include <stdbool.h>
@@ -37,7 +39,7 @@
 
 enum sc_screen {
     SC_SCREEN_DEVICES,
-    SC_SCREEN_OPTIONS_STUB,
+    SC_SCREEN_OPTIONS,
 };
 
 static volatile sig_atomic_t sc_resize_requested;
@@ -142,16 +144,10 @@ sc_resize_device_panel(struct sc_device_panel *panel, int rows, int cols,
                                   cols, devices);
 }
 
-static void
-sc_draw_options_stub(WINDOW *win, const struct sc_device *device, int rows,
-                     int cols) {
-    (void) cols;
-    mvwprintw(win, rows / 2 - 1, 2, "Options form stub");
-    if (device) {
-        mvwprintw(win, rows / 2, 2, "Selected: %s  %s  %s", device->serial,
-                  device->model, device->state);
-    }
-    mvwprintw(win, rows / 2 + 2, 2, "Press Esc to return, q to quit");
+static bool
+sc_resize_options_form(struct sc_options_form *form, int rows, int cols) {
+    int form_rows = rows - SC_TUI_HEADER_HEIGHT - SC_TUI_FOOTER_HEIGHT;
+    return sc_options_form_resize(form, SC_TUI_HEADER_HEIGHT, 0, form_rows, cols);
 }
 
 int
@@ -159,8 +155,12 @@ main(void) {
     int ret = 1;
     bool curses_started = false;
     bool panel_started = false;
+    bool form_started = false;
     struct sc_device_panel panel;
+    struct sc_options_form form;
     struct sc_device_list devices = {0};
+    struct sc_launch_opts launch_opts;
+    const char *launch_argv[96];
     enum sc_screen screen = SC_SCREEN_DEVICES;
     char status[80] = "starting";
     int rows = 0;
@@ -194,6 +194,12 @@ main(void) {
         goto cleanup;
     }
     panel_started = true;
+    if (!sc_options_form_init(&form, SC_TUI_HEADER_HEIGHT, 0,
+                              rows - SC_TUI_HEADER_HEIGHT - SC_TUI_FOOTER_HEIGHT,
+                              cols)) {
+        goto cleanup;
+    }
+    form_started = true;
 
     (void) sc_refresh_devices(&devices, status, sizeof(status));
     long next_refresh = sc_monotonic_ms() + SC_REFRESH_INTERVAL_MS;
@@ -211,6 +217,9 @@ main(void) {
             getmaxyx(stdscr, rows, cols);
             too_small = rows < SC_TUI_MIN_ROWS || cols < SC_TUI_MIN_COLS;
             if (!too_small && !sc_resize_device_panel(&panel, rows, cols, &devices)) {
+                goto cleanup;
+            }
+            if (!too_small && !sc_resize_options_form(&form, rows, cols)) {
                 goto cleanup;
             }
             redrawwin(stdscr);
@@ -238,13 +247,40 @@ main(void) {
             }
 
             if (action == SC_DEVICE_PANEL_ACTIVATE && sc_device_panel_selected(&panel, &devices)) {
-                screen = SC_SCREEN_OPTIONS_STUB;
-                snprintf(status, sizeof(status), "options stub");
+                const struct sc_device *device = sc_device_panel_selected(&panel, &devices);
+                sc_launch_opts_init(&launch_opts, device->serial);
+                screen = SC_SCREEN_OPTIONS;
+                snprintf(status, sizeof(status), "options for %s", device->serial);
             }
-        } else if (key == 27) {
-            screen = SC_SCREEN_DEVICES;
-            snprintf(status, sizeof(status), "%d device%s", devices.count,
-                     devices.count == 1 ? "" : "s");
+        } else if (screen == SC_SCREEN_OPTIONS) {
+            enum sc_options_form_action action = SC_OPTIONS_FORM_NONE;
+            if (key == KEY_MOUSE) {
+                MEVENT event;
+                if (getmouse(&event) == OK) {
+                    action = sc_options_form_handle_mouse(&form, &event, &launch_opts);
+                }
+            } else {
+                action = sc_options_form_handle_key(&form, key, &launch_opts);
+            }
+
+            if (action == SC_OPTIONS_FORM_BACK) {
+                screen = SC_SCREEN_DEVICES;
+                snprintf(status, sizeof(status), "%d device%s", devices.count,
+                         devices.count == 1 ? "" : "s");
+            } else if (action == SC_OPTIONS_FORM_LAUNCH) {
+                int argc = sc_launch_opts_to_argv(&launch_opts, launch_argv,
+                                                  sizeof(launch_argv) / sizeof(launch_argv[0]));
+                if (argc < 0) {
+                    snprintf(status, sizeof(status), "argv too small");
+                } else {
+                    fprintf(stderr, "scrcpy argv:");
+                    for (int i = 0; i < argc; ++i) {
+                        fprintf(stderr, " %s", launch_argv[i]);
+                    }
+                    fprintf(stderr, "\n");
+                    snprintf(status, sizeof(status), "launch argv built (%d args)", argc);
+                }
+            }
         }
 
         if (too_small) {
@@ -255,14 +291,16 @@ main(void) {
         if (!sc_resize_device_panel(&panel, rows, cols, &devices)) {
             goto cleanup;
         }
+        if (!sc_resize_options_form(&form, rows, cols)) {
+            goto cleanup;
+        }
 
         werase(stdscr);
         sc_draw_header(stdscr, cols);
         if (screen == SC_SCREEN_DEVICES) {
             sc_device_panel_draw(&panel, &devices);
         } else {
-            sc_draw_options_stub(stdscr, sc_device_panel_selected(&panel, &devices), rows,
-                                 cols);
+            sc_options_form_draw(&form, &launch_opts);
         }
         sc_draw_footer(stdscr, rows, cols, status);
         wnoutrefresh(stdscr);
@@ -275,6 +313,9 @@ cleanup:
     sc_device_list_free(&devices);
     if (panel_started) {
         sc_device_panel_destroy(&panel);
+    }
+    if (form_started) {
+        sc_options_form_destroy(&form);
     }
     if (curses_started) {
         endwin();

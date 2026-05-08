@@ -17,17 +17,14 @@
 #ifndef SC_TUI_OPTIONS_FORM_H
 #define SC_TUI_OPTIONS_FORM_H
 
-#include <stdbool.h>
-#include <stddef.h>
-
 #include "launch_opts.h"
 #include "ui/layout.h"
+
+#include <stdbool.h>
 
 enum sc_options_form_action {
     SC_OPTIONS_FORM_NONE,
     SC_OPTIONS_FORM_BACK,
-    SC_OPTIONS_FORM_SAVE_PROFILE,
-    SC_OPTIONS_FORM_LOAD_PROFILE,
     SC_OPTIONS_FORM_LAUNCH,
 };
 
@@ -37,9 +34,9 @@ struct sc_options_form {
     int x;
     int rows;
     int cols;
-    size_t field;
-    char error[80];
-    char profile_name[64];
+    int focus;
+    int scroll;
+    char help[160];
 };
 
 bool
@@ -57,11 +54,12 @@ enum sc_options_form_action
 sc_options_form_handle_key(struct sc_options_form *form, int key,
                            struct sc_launch_opts *opts);
 
+enum sc_options_form_action
+sc_options_form_handle_mouse(struct sc_options_form *form, const MEVENT *event,
+                             struct sc_launch_opts *opts);
+
 void
 sc_options_form_draw(struct sc_options_form *form,
                      const struct sc_launch_opts *opts);
-
-void
-sc_options_form_set_error(struct sc_options_form *form, const char *error);
 
 #endif

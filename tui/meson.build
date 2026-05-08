@@ -25,8 +25,10 @@ endif
 executable('scrcpy-tui',
            [
                'src/adb_list.c',
+               'src/launch_opts.c',
                'src/main.c',
                'src/ui/device_panel.c',
+               'src/ui/options_form.c',
            ],
            include_directories: tui_src_dir,
            dependencies: [tui_curses_dep, tui_platform_deps],
@@ -42,4 +44,12 @@ tui_adb_test = executable('scrcpy-tui-adb-test',
                           dependencies: tui_platform_deps,
                           c_args: tui_c_args)
 
-test('scrcpy-tui-adb-test', tui_adb_test)
+tui_opts_argv_test = executable('scrcpy-tui-test-opts-argv',
+                                [
+                                    'test/test_opts_argv.c',
+                                    'src/launch_opts.c',
+                                ],
+                                include_directories: tui_src_dir,
+                                c_args: tui_c_args)
+
+test('scrcpy-tui-test-opts-argv', tui_opts_argv_test)

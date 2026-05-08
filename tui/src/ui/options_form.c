@@ -20,32 +20,189 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "ui/layout.h"
-
-enum sc_options_field {
-    SC_FIELD_PROFILE_NAME,
-    SC_FIELD_SAVE_PROFILE,
-    SC_FIELD_LOAD_PROFILE,
-    SC_FIELD_MAX_SIZE,
-    SC_FIELD_MAX_FPS,
-    SC_FIELD_VIDEO_CODEC,
-    SC_FIELD_NO_AUDIO,
-    SC_FIELD_RECORD_PATH,
-    SC_FIELD_CONNECTION,
-    SC_FIELD_TCPIP_ADDR,
-    SC_FIELD_KEYBOARD_MODE,
-    SC_FIELD_TURN_SCREEN_OFF,
-    SC_FIELD_LAUNCH,
-    SC_FIELD_COUNT,
+enum sc_field_type {
+    SC_FIELD_SECTION,
+    SC_FIELD_TEXT,
+    SC_FIELD_NUMERIC,
+    SC_FIELD_SELECT,
+    SC_FIELD_CHECKBOX,
+    SC_FIELD_BUTTON,
 };
 
-static const char *const sc_video_codec_names[] = {"h264", "h265", "av1"};
-static const char *const sc_connection_names[] = {"USB", "TCPIP"};
-static const char *const sc_keyboard_mode_names[] = {"disabled", "sdk", "uhid"};
+enum sc_field_id {
+    F_VIDEO,
+    F_MAX_SIZE,
+    F_MAX_FPS,
+    F_VIDEO_CODEC,
+    F_VIDEO_SOURCE,
+    F_DISPLAY_ID,
+    F_NEW_DISPLAY,
+    F_CROP,
+    F_ORIENTATION,
+    F_RECORD_PATH,
+    F_RECORD_FORMAT,
+    F_AUDIO,
+    F_NO_AUDIO,
+    F_AUDIO_CODEC,
+    F_AUDIO_SOURCE,
+    F_AUDIO_BUFFER,
+    F_CONTROL,
+    F_KEYBOARD,
+    F_MOUSE,
+    F_GAMEPAD,
+    F_NO_CONTROL,
+    F_DEVICE,
+    F_TCPIP,
+    F_TURN_SCREEN_OFF,
+    F_STAY_AWAKE,
+    F_SHOW_TOUCHES,
+    F_POWER_OFF,
+    F_WINDOW,
+    F_FULLSCREEN,
+    F_ALWAYS_ON_TOP,
+    F_WINDOW_TITLE,
+    F_NO_WINDOW,
+    F_MISC,
+    F_OTG,
+    F_V4L2,
+    F_NO_DOWNSIZE,
+    F_VERBOSITY,
+    F_BACK,
+    F_LAUNCH,
+    F_COUNT,
+};
 
-void
-sc_options_form_set_error(struct sc_options_form *form, const char *error) {
-    snprintf(form->error, sizeof(form->error), "%s", error ? error : "");
+struct sc_field_def {
+    enum sc_field_id id;
+    enum sc_field_type type;
+    const char *label;
+    const char *help;
+};
+
+static const struct sc_field_def sc_fields[] = {
+    {F_VIDEO, SC_FIELD_SECTION, "Video", "Video capture and recording options"},
+    {F_MAX_SIZE, SC_FIELD_NUMERIC, "Max size", "--max-size value: limit width and height"},
+    {F_MAX_FPS, SC_FIELD_NUMERIC, "Max FPS", "--max-fps value: limit capture framerate"},
+    {F_VIDEO_CODEC, SC_FIELD_SELECT, "Video codec", "--video-codec h264|h265|av1"},
+    {F_VIDEO_SOURCE, SC_FIELD_SELECT, "Video source", "--video-source display|camera"},
+    {F_DISPLAY_ID, SC_FIELD_NUMERIC, "Display ID", "--display-id id"},
+    {F_NEW_DISPLAY, SC_FIELD_TEXT, "New display", "--new-display[=WxH[/DPI]]; enter 1 for no value"},
+    {F_CROP, SC_FIELD_TEXT, "Crop", "--crop width:height:x:y"},
+    {F_ORIENTATION, SC_FIELD_TEXT, "Lock orientation", "--capture-orientation value"},
+    {F_RECORD_PATH, SC_FIELD_TEXT, "Record path", "--record file"},
+    {F_RECORD_FORMAT, SC_FIELD_TEXT, "Record format", "--record-format format"},
+    {F_AUDIO, SC_FIELD_SECTION, "Audio", "Audio capture options"},
+    {F_NO_AUDIO, SC_FIELD_CHECKBOX, "No audio", "--no-audio"},
+    {F_AUDIO_CODEC, SC_FIELD_SELECT, "Audio codec", "--audio-codec opus|aac|flac"},
+    {F_AUDIO_SOURCE, SC_FIELD_SELECT, "Audio source", "--audio-source output|playback|mic"},
+    {F_AUDIO_BUFFER, SC_FIELD_NUMERIC, "Audio buffer", "--audio-buffer ms"},
+    {F_CONTROL, SC_FIELD_SECTION, "Control", "Input/control options"},
+    {F_KEYBOARD, SC_FIELD_SELECT, "Keyboard", "--keyboard disabled|sdk|uhid|aoa"},
+    {F_MOUSE, SC_FIELD_SELECT, "Mouse", "--mouse disabled|sdk|uhid|aoa"},
+    {F_GAMEPAD, SC_FIELD_SELECT, "Gamepad", "--gamepad disabled|uhid|aoa"},
+    {F_NO_CONTROL, SC_FIELD_CHECKBOX, "No control", "--no-control"},
+    {F_DEVICE, SC_FIELD_SECTION, "Device", "Device connection and device-state options"},
+    {F_TCPIP, SC_FIELD_TEXT, "TCP/IP", "--tcpip[=ip[:port]]; enter 1 for no value"},
+    {F_TURN_SCREEN_OFF, SC_FIELD_CHECKBOX, "Turn screen off", "--turn-screen-off"},
+    {F_STAY_AWAKE, SC_FIELD_CHECKBOX, "Stay awake", "--stay-awake"},
+    {F_SHOW_TOUCHES, SC_FIELD_CHECKBOX, "Show touches", "--show-touches"},
+    {F_POWER_OFF, SC_FIELD_CHECKBOX, "Power off close", "--power-off-on-close"},
+    {F_WINDOW, SC_FIELD_SECTION, "Window", "Desktop window options"},
+    {F_FULLSCREEN, SC_FIELD_CHECKBOX, "Fullscreen", "--fullscreen"},
+    {F_ALWAYS_ON_TOP, SC_FIELD_CHECKBOX, "Always on top", "--always-on-top"},
+    {F_WINDOW_TITLE, SC_FIELD_TEXT, "Window title", "--window-title text"},
+    {F_NO_WINDOW, SC_FIELD_CHECKBOX, "No window", "--no-window"},
+    {F_MISC, SC_FIELD_SECTION, "Misc", "Miscellaneous options"},
+    {F_OTG, SC_FIELD_CHECKBOX, "OTG", "--otg"},
+    {F_V4L2, SC_FIELD_TEXT, "V4L2 sink", "--v4l2-sink /dev/videoN"},
+    {F_NO_DOWNSIZE, SC_FIELD_CHECKBOX, "No downsize", "--no-downsize-on-error"},
+    {F_VERBOSITY, SC_FIELD_SELECT, "Verbosity", "--verbosity verbose|debug|info|warn|error"},
+    {F_BACK, SC_FIELD_BUTTON, "Back", "Return to device list"},
+    {F_LAUNCH, SC_FIELD_BUTTON, "Launch", "Build argv and launch scrcpy"},
+};
+
+static const char *const video_codecs[] = {"h264", "h265", "av1"};
+static const char *const video_sources[] = {"display", "camera"};
+static const char *const audio_codecs[] = {"opus", "aac", "flac"};
+static const char *const audio_sources[] = {"output", "playback", "mic"};
+static const char *const control_modes[] = {"disabled", "sdk", "uhid", "aoa"};
+static const char *const gamepad_modes[] = {"disabled", "uhid", "aoa"};
+static const char *const verbosity_names[] = {"info", "verbose", "debug", "warn", "error"};
+
+static bool
+sc_field_visible(enum sc_field_id id) {
+#ifndef __linux__
+    if (id == F_V4L2) {
+        return false;
+    }
+#else
+    (void) id;
+#endif
+    return true;
+}
+
+static bool
+sc_field_focusable(enum sc_field_id id) {
+    return sc_field_visible(id) && sc_fields[id].type != SC_FIELD_SECTION;
+}
+
+static int
+sc_next_focus(int focus, int dir) {
+    int next = focus;
+    do {
+        next += dir;
+        if (next < 0) {
+            next = F_COUNT - 1;
+        } else if (next >= F_COUNT) {
+            next = 0;
+        }
+    } while (!sc_field_focusable((enum sc_field_id) next));
+    return next;
+}
+
+static void
+sc_form_clamp_scroll(struct sc_options_form *form) {
+    int row = 0;
+    int focus_row = 0;
+    for (int i = 0; i < F_COUNT; ++i) {
+        if (!sc_field_visible((enum sc_field_id) i)) {
+            continue;
+        }
+        if (i == form->focus) {
+            focus_row = row;
+            break;
+        }
+        ++row;
+    }
+
+    int visible = form->rows > 4 ? form->rows - 4 : 1;
+    if (focus_row < form->scroll) {
+        form->scroll = focus_row;
+    } else if (focus_row >= form->scroll + visible) {
+        form->scroll = focus_row - visible + 1;
+    }
+    if (form->scroll < 0) {
+        form->scroll = 0;
+    }
+}
+
+static char *
+sc_field_text(struct sc_launch_opts *opts, enum sc_field_id id, size_t *cap) {
+    switch (id) {
+        case F_MAX_SIZE: *cap = sizeof(opts->max_size); return opts->max_size;
+        case F_MAX_FPS: *cap = sizeof(opts->max_fps); return opts->max_fps;
+        case F_DISPLAY_ID: *cap = sizeof(opts->display_id); return opts->display_id;
+        case F_NEW_DISPLAY: *cap = sizeof(opts->new_display); return opts->new_display;
+        case F_CROP: *cap = sizeof(opts->crop); return opts->crop;
+        case F_ORIENTATION: *cap = sizeof(opts->lock_video_orientation); return opts->lock_video_orientation;
+        case F_RECORD_PATH: *cap = sizeof(opts->record_path); return opts->record_path;
+        case F_RECORD_FORMAT: *cap = sizeof(opts->record_format); return opts->record_format;
+        case F_AUDIO_BUFFER: *cap = sizeof(opts->audio_buffer); return opts->audio_buffer;
+        case F_TCPIP: *cap = sizeof(opts->tcpip_addr); return opts->tcpip_addr;
+        case F_WINDOW_TITLE: *cap = sizeof(opts->window_title); return opts->window_title;
+        case F_V4L2: *cap = sizeof(opts->v4l2_sink); return opts->v4l2_sink;
+        default: *cap = 0; return NULL;
+    }
 }
 
 static bool
@@ -54,110 +211,112 @@ sc_text_backspace(char *text) {
     if (!len) {
         return false;
     }
-
     text[len - 1] = '\0';
     return true;
 }
 
 static bool
-sc_text_append(char *text, size_t cap, int ch) {
+sc_text_append(char *text, size_t cap, int key, bool numeric) {
+    if (key == KEY_BACKSPACE || key == 127 || key == 8) {
+        return sc_text_backspace(text);
+    }
+    if (key < 32 || key > 126) {
+        return false;
+    }
+    if (numeric && !isdigit((unsigned char) key)) {
+        return false;
+    }
     size_t len = strlen(text);
     if (len + 1 >= cap) {
         return false;
     }
-
-    text[len] = (char) ch;
+    text[len] = (char) key;
     text[len + 1] = '\0';
     return true;
 }
 
-static bool
-sc_numeric_key(char *text, size_t cap, int key) {
-    if (key == KEY_BACKSPACE || key == 127 || key == 8) {
-        (void) sc_text_backspace(text);
-        return true;
+static void
+sc_cycle_select(struct sc_launch_opts *opts, enum sc_field_id id, int dir) {
+    switch (id) {
+        case F_VIDEO_CODEC: opts->video_codec = (opts->video_codec + dir + 3) % 3; break;
+        case F_VIDEO_SOURCE: opts->video_source = (opts->video_source + dir + 2) % 2; break;
+        case F_AUDIO_CODEC: opts->audio_codec = (opts->audio_codec + dir + 3) % 3; break;
+        case F_AUDIO_SOURCE: opts->audio_source = (opts->audio_source + dir + 3) % 3; break;
+        case F_KEYBOARD: opts->keyboard_mode = (opts->keyboard_mode + dir + 4) % 4; break;
+        case F_MOUSE: opts->mouse_mode = (opts->mouse_mode + dir + 4) % 4; break;
+        case F_GAMEPAD: opts->gamepad = (opts->gamepad + dir + 3) % 3; break;
+        case F_VERBOSITY: opts->verbosity = (opts->verbosity + dir + 5) % 5; break;
+        default: break;
     }
-
-    if (!isdigit((unsigned char) key)) {
-        return false;
-    }
-
-    return sc_text_append(text, cap, key);
-}
-
-static bool
-sc_profile_key(char *text, size_t cap, int key) {
-    if (key == KEY_BACKSPACE || key == 127 || key == 8) {
-        (void) sc_text_backspace(text);
-        return true;
-    }
-
-    unsigned char c = (unsigned char) key;
-    if (!isalnum(c) && c != '-' && c != '_') {
-        return false;
-    }
-
-    return sc_text_append(text, cap, key);
-}
-
-static bool
-sc_path_key(char *text, size_t cap, int key) {
-    if (key == KEY_BACKSPACE || key == 127 || key == 8) {
-        (void) sc_text_backspace(text);
-        return true;
-    }
-
-    if (key < 32 || key > 126) {
-        return false;
-    }
-
-    return sc_text_append(text, cap, key);
 }
 
 static void
-sc_options_form_next(struct sc_options_form *form) {
-    form->field = (form->field + 1) % SC_FIELD_COUNT;
+sc_toggle_checkbox(struct sc_launch_opts *opts, enum sc_field_id id) {
+    switch (id) {
+        case F_NO_AUDIO: opts->no_audio = !opts->no_audio; break;
+        case F_NO_CONTROL: opts->no_control = !opts->no_control; break;
+        case F_TURN_SCREEN_OFF: opts->turn_screen_off = !opts->turn_screen_off; break;
+        case F_STAY_AWAKE: opts->stay_awake = !opts->stay_awake; break;
+        case F_SHOW_TOUCHES: opts->show_touches = !opts->show_touches; break;
+        case F_POWER_OFF: opts->power_off_on_close = !opts->power_off_on_close; break;
+        case F_FULLSCREEN: opts->fullscreen = !opts->fullscreen; break;
+        case F_ALWAYS_ON_TOP: opts->always_on_top = !opts->always_on_top; break;
+        case F_NO_WINDOW: opts->no_window = !opts->no_window; break;
+        case F_OTG: opts->otg = !opts->otg; break;
+        case F_NO_DOWNSIZE: opts->no_downsize_on_error = !opts->no_downsize_on_error; break;
+        default: break;
+    }
 }
 
-static void
-sc_options_form_prev(struct sc_options_form *form) {
-    form->field = form->field ? form->field - 1 : SC_FIELD_COUNT - 1;
+static bool
+sc_checkbox_value(const struct sc_launch_opts *opts, enum sc_field_id id) {
+    switch (id) {
+        case F_NO_AUDIO: return opts->no_audio;
+        case F_NO_CONTROL: return opts->no_control;
+        case F_TURN_SCREEN_OFF: return opts->turn_screen_off;
+        case F_STAY_AWAKE: return opts->stay_awake;
+        case F_SHOW_TOUCHES: return opts->show_touches;
+        case F_POWER_OFF: return opts->power_off_on_close;
+        case F_FULLSCREEN: return opts->fullscreen;
+        case F_ALWAYS_ON_TOP: return opts->always_on_top;
+        case F_NO_WINDOW: return opts->no_window;
+        case F_OTG: return opts->otg;
+        case F_NO_DOWNSIZE: return opts->no_downsize_on_error;
+        default: return false;
+    }
 }
 
-static void
-sc_options_form_toggle(struct sc_options_form *form, struct sc_launch_opts *opts) {
-    switch (form->field) {
-        case SC_FIELD_VIDEO_CODEC:
-            opts->video_codec = (opts->video_codec + 1) % 3;
+static const char *
+sc_select_value(const struct sc_launch_opts *opts, enum sc_field_id id) {
+    switch (id) {
+        case F_VIDEO_CODEC: return video_codecs[opts->video_codec];
+        case F_VIDEO_SOURCE: return video_sources[opts->video_source];
+        case F_AUDIO_CODEC: return audio_codecs[opts->audio_codec];
+        case F_AUDIO_SOURCE: return audio_sources[opts->audio_source];
+        case F_KEYBOARD: return control_modes[opts->keyboard_mode];
+        case F_MOUSE: return control_modes[opts->mouse_mode];
+        case F_GAMEPAD: return gamepad_modes[opts->gamepad];
+        case F_VERBOSITY: return verbosity_names[opts->verbosity];
+        default: return "";
+    }
+}
+
+static enum sc_options_form_action
+sc_activate(struct sc_options_form *form, struct sc_launch_opts *opts) {
+    enum sc_field_id id = (enum sc_field_id) form->focus;
+    switch (sc_fields[id].type) {
+        case SC_FIELD_CHECKBOX:
+            sc_toggle_checkbox(opts, id);
             break;
-        case SC_FIELD_NO_AUDIO:
-            opts->no_audio = !opts->no_audio;
+        case SC_FIELD_SELECT:
+            sc_cycle_select(opts, id, 1);
             break;
-        case SC_FIELD_CONNECTION:
-            opts->connection = opts->connection == SC_CONNECTION_USB
-                    ? SC_CONNECTION_TCPIP : SC_CONNECTION_USB;
-            break;
-        case SC_FIELD_KEYBOARD_MODE:
-            opts->keyboard_mode = (opts->keyboard_mode + 1) % 3;
-            break;
-        case SC_FIELD_TURN_SCREEN_OFF:
-            opts->turn_screen_off = !opts->turn_screen_off;
-            break;
+        case SC_FIELD_BUTTON:
+            return id == F_LAUNCH ? SC_OPTIONS_FORM_LAUNCH : SC_OPTIONS_FORM_BACK;
         default:
             break;
     }
-}
-
-static void
-sc_options_form_draw_field(struct sc_options_form *form, int row,
-                           enum sc_options_field field, const char *label,
-                           const char *value) {
-    bool selected = form->field == (size_t) field;
-    int pair = selected ? PAIR_SELECTED : PAIR_NORMAL;
-    wattron(form->win, COLOR_PAIR(pair));
-    mvwprintw(form->win, row, 2, "%-18s %-*.*s", label, form->cols - 24,
-              form->cols - 24, value);
-    wattroff(form->win, COLOR_PAIR(pair));
+    return SC_OPTIONS_FORM_NONE;
 }
 
 bool
@@ -167,14 +326,13 @@ sc_options_form_init(struct sc_options_form *form, int y, int x, int rows,
     if (!form->win) {
         return false;
     }
-
     form->y = y;
     form->x = x;
     form->rows = rows;
     form->cols = cols;
-    form->field = 0;
-    form->error[0] = '\0';
-    form->profile_name[0] = '\0';
+    form->focus = F_MAX_SIZE;
+    form->scroll = 0;
+    form->help[0] = '\0';
     keypad(form->win, TRUE);
     return true;
 }
@@ -190,17 +348,16 @@ sc_options_form_destroy(struct sc_options_form *form) {
 bool
 sc_options_form_resize(struct sc_options_form *form, int y, int x, int rows,
                        int cols) {
-    if (wresize(form->win, rows, cols) == ERR) {
+    if (wresize(form->win, rows, cols) == ERR || mvwin(form->win, y, x) == ERR) {
         return false;
     }
-    if (mvwin(form->win, y, x) == ERR) {
-        return false;
-    }
-
     form->y = y;
     form->x = x;
     form->rows = rows;
     form->cols = cols;
+    sc_form_clamp_scroll(form);
+    redrawwin(form->win);
+    wrefresh(form->win);
     return true;
 }
 
@@ -210,70 +367,79 @@ sc_options_form_handle_key(struct sc_options_form *form, int key,
     if (key == ERR) {
         return SC_OPTIONS_FORM_NONE;
     }
-
-    sc_options_form_set_error(form, NULL);
+    form->help[0] = '\0';
 
     switch (key) {
         case 27:
             return SC_OPTIONS_FORM_BACK;
+        case KEY_F(1):
+            snprintf(form->help, sizeof(form->help), "%s", sc_fields[form->focus].help);
+            return SC_OPTIONS_FORM_NONE;
         case '\t':
         case KEY_DOWN:
-            sc_options_form_next(form);
+            form->focus = sc_next_focus(form->focus, 1);
+            sc_form_clamp_scroll(form);
             return SC_OPTIONS_FORM_NONE;
 #ifdef KEY_BTAB
         case KEY_BTAB:
 #endif
         case KEY_UP:
-            sc_options_form_prev(form);
+            form->focus = sc_next_focus(form->focus, -1);
+            sc_form_clamp_scroll(form);
+            return SC_OPTIONS_FORM_NONE;
+        case KEY_LEFT:
+            sc_cycle_select(opts, (enum sc_field_id) form->focus, -1);
+            return SC_OPTIONS_FORM_NONE;
+        case KEY_RIGHT:
+            sc_cycle_select(opts, (enum sc_field_id) form->focus, 1);
             return SC_OPTIONS_FORM_NONE;
         case ' ':
-            sc_options_form_toggle(form, opts);
-            return SC_OPTIONS_FORM_NONE;
         case '\n':
         case '\r':
         case KEY_ENTER:
-            if (form->field == SC_FIELD_LAUNCH) {
-                return SC_OPTIONS_FORM_LAUNCH;
+            return sc_activate(form, opts);
+        default:
+            break;
+    }
+
+    enum sc_field_id id = (enum sc_field_id) form->focus;
+    if (sc_fields[id].type == SC_FIELD_TEXT || sc_fields[id].type == SC_FIELD_NUMERIC) {
+        size_t cap;
+        char *text = sc_field_text(opts, id, &cap);
+        if (text) {
+            (void) sc_text_append(text, cap, key, sc_fields[id].type == SC_FIELD_NUMERIC);
+        }
+    }
+    return SC_OPTIONS_FORM_NONE;
+}
+
+enum sc_options_form_action
+sc_options_form_handle_mouse(struct sc_options_form *form, const MEVENT *event,
+                             struct sc_launch_opts *opts) {
+    if (event->x <= form->x || event->x >= form->x + form->cols - 1) {
+        return SC_OPTIONS_FORM_NONE;
+    }
+    int visible_row = event->y - form->y - 1;
+    if (visible_row < 0 || visible_row >= form->rows - 2) {
+        return SC_OPTIONS_FORM_NONE;
+    }
+    int logical_row = form->scroll + visible_row;
+    int row = 0;
+    for (int i = 0; i < F_COUNT; ++i) {
+        if (!sc_field_visible((enum sc_field_id) i)) {
+            continue;
+        }
+        if (row == logical_row) {
+            if (!sc_field_focusable((enum sc_field_id) i)) {
+                return SC_OPTIONS_FORM_NONE;
             }
-            if (form->field == SC_FIELD_SAVE_PROFILE) {
-                return SC_OPTIONS_FORM_SAVE_PROFILE;
+            form->focus = i;
+            if (event->bstate & (BUTTON1_CLICKED | BUTTON1_DOUBLE_CLICKED | BUTTON1_PRESSED)) {
+                return sc_activate(form, opts);
             }
-            if (form->field == SC_FIELD_LOAD_PROFILE) {
-                return SC_OPTIONS_FORM_LOAD_PROFILE;
-            }
-            sc_options_form_toggle(form, opts);
             return SC_OPTIONS_FORM_NONE;
-        default:
-            break;
-    }
-
-    bool accepted = true;
-    switch (form->field) {
-        case SC_FIELD_PROFILE_NAME:
-            accepted = sc_profile_key(form->profile_name,
-                                      sizeof(form->profile_name), key);
-            break;
-        case SC_FIELD_MAX_SIZE:
-            accepted = sc_numeric_key(opts->max_size, sizeof(opts->max_size), key);
-            break;
-        case SC_FIELD_MAX_FPS:
-            accepted = sc_numeric_key(opts->max_fps, sizeof(opts->max_fps), key);
-            break;
-        case SC_FIELD_RECORD_PATH:
-            accepted = sc_path_key(opts->record_path, sizeof(opts->record_path), key);
-            break;
-        case SC_FIELD_TCPIP_ADDR:
-            accepted = sc_path_key(opts->tcpip_addr, sizeof(opts->tcpip_addr), key);
-            break;
-        default:
-            accepted = true;
-            break;
-    }
-
-    if (!accepted) {
-        sc_options_form_set_error(form, form->field == SC_FIELD_PROFILE_NAME
-                                  ? "profile: use letters, numbers, dash or underscore"
-                                  : "invalid input for field");
+        }
+        ++row;
     }
     return SC_OPTIONS_FORM_NONE;
 }
@@ -282,49 +448,61 @@ void
 sc_options_form_draw(struct sc_options_form *form,
                      const struct sc_launch_opts *opts) {
     werase(form->win);
-    wattron(form->win, COLOR_PAIR(PAIR_NORMAL));
     box(form->win, 0, 0);
     mvwprintw(form->win, 0, 2, " Options ");
+    sc_form_clamp_scroll(form);
 
-    if (form->cols < 30 || form->rows < 17) {
-        mvwprintw(form->win, 1, 2, "Panel too small");
-        wattroff(form->win, COLOR_PAIR(PAIR_NORMAL));
-        wnoutrefresh(form->win);
-        return;
+    int visible = form->rows - 3;
+    int logical_row = 0;
+    int drawn = 0;
+    for (int i = 0; i < F_COUNT && drawn < visible; ++i) {
+        enum sc_field_id id = (enum sc_field_id) i;
+        if (!sc_field_visible(id)) {
+            continue;
+        }
+        if (logical_row++ < form->scroll) {
+            continue;
+        }
+
+        const struct sc_field_def *field = &sc_fields[i];
+        int y = drawn + 1;
+        if (field->type == SC_FIELD_SECTION) {
+            wattron(form->win, COLOR_PAIR(PAIR_HEADER));
+            mvwprintw(form->win, y, 2, "%-*s", form->cols - 4, field->label);
+            wattroff(form->win, COLOR_PAIR(PAIR_HEADER));
+        } else {
+            bool focused = form->focus == i;
+            int pair = focused ? PAIR_SELECTED : PAIR_NORMAL;
+            wattron(form->win, COLOR_PAIR(pair));
+            char value[320] = "";
+            if (field->type == SC_FIELD_CHECKBOX) {
+                snprintf(value, sizeof(value), "[%c]", sc_checkbox_value(opts, id) ? 'x' : ' ');
+            } else if (field->type == SC_FIELD_SELECT) {
+                snprintf(value, sizeof(value), "< %s >", sc_select_value(opts, id));
+            } else if (field->type == SC_FIELD_BUTTON) {
+                snprintf(value, sizeof(value), "[ %s ]", field->label);
+            } else {
+                size_t cap;
+                char *text = sc_field_text((struct sc_launch_opts *) opts, id, &cap);
+                (void) cap;
+                snprintf(value, sizeof(value), "%s", text ? text : "");
+            }
+            if (field->type == SC_FIELD_BUTTON) {
+                mvwprintw(form->win, y, 2, "%-*s", form->cols - 4, value);
+            } else {
+                mvwprintw(form->win, y, 2, "%-18s %-*.*s", field->label,
+                          form->cols - 24, form->cols - 24, value);
+            }
+            wattroff(form->win, COLOR_PAIR(pair));
+        }
+        ++drawn;
     }
 
-    char value[320];
-    sc_options_form_draw_field(form, 2, SC_FIELD_PROFILE_NAME, "Profile",
-                               form->profile_name[0] ? form->profile_name : "-");
-    sc_options_form_draw_field(form, 3, SC_FIELD_SAVE_PROFILE, "", "[Save As...] ");
-    sc_options_form_draw_field(form, 4, SC_FIELD_LOAD_PROFILE, "", "[Load]");
-    snprintf(value, sizeof(value), "%s", opts->max_size[0] ? opts->max_size : "0");
-    sc_options_form_draw_field(form, 6, SC_FIELD_MAX_SIZE, "Max size", value);
-    snprintf(value, sizeof(value), "%s", opts->max_fps[0] ? opts->max_fps : "0");
-    sc_options_form_draw_field(form, 7, SC_FIELD_MAX_FPS, "Max fps", value);
-    sc_options_form_draw_field(form, 8, SC_FIELD_VIDEO_CODEC, "Video codec",
-                               sc_video_codec_names[opts->video_codec]);
-    sc_options_form_draw_field(form, 9, SC_FIELD_NO_AUDIO, "No audio",
-                               opts->no_audio ? "[x]" : "[ ]");
-    sc_options_form_draw_field(form, 10, SC_FIELD_RECORD_PATH, "Record to file",
-                               opts->record_path[0] ? opts->record_path : "-");
-    sc_options_form_draw_field(form, 11, SC_FIELD_CONNECTION, "Connection",
-                               sc_connection_names[opts->connection]);
-    sc_options_form_draw_field(form, 12, SC_FIELD_TCPIP_ADDR, "IP:port",
-                               opts->tcpip_addr[0] ? opts->tcpip_addr : "-");
-    sc_options_form_draw_field(form, 13, SC_FIELD_KEYBOARD_MODE, "Keyboard mode",
-                               sc_keyboard_mode_names[opts->keyboard_mode]);
-    sc_options_form_draw_field(form, 14, SC_FIELD_TURN_SCREEN_OFF,
-                               "Turn screen off", opts->turn_screen_off ? "[x]" : "[ ]");
-    sc_options_form_draw_field(form, 16, SC_FIELD_LAUNCH, "", "Launch");
-
-    if (form->error[0]) {
+    if (form->help[0]) {
         wattron(form->win, COLOR_PAIR(PAIR_STATUS));
-        mvwprintw(form->win, form->rows - 2, 2, "%.*s", form->cols - 4,
-                  form->error);
+        mvwprintw(form->win, form->rows - 2, 2, "%-*.*s", form->cols - 4,
+                  form->cols - 4, form->help);
         wattroff(form->win, COLOR_PAIR(PAIR_STATUS));
     }
-
-    wattroff(form->win, COLOR_PAIR(PAIR_NORMAL));
     wnoutrefresh(form->win);
 }
