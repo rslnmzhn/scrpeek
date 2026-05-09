@@ -1,0 +1,6 @@
+adb.exe
+AdbWinApi.dll
+AdbWinUsbApi.dll
+scrcpy.exe
+scrcpy-server
+*.dll

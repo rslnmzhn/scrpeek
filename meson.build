@@ -1,6 +1,6 @@
 project('scrcpy', 'c',
         version: '3.3.4',
-        meson_version: '>= 0.49',
+        meson_version: '>= 0.55',
         default_options: [
             'c_std=c11',
             'warning_level=2',
@@ -15,4 +15,8 @@ endif
 
 if get_option('compile_server')
     subdir('server')
+endif
+
+if get_option('compile_tui')
+    subdir('tui')
 endif

@@ -8,3 +8,8 @@ build/
 /x/
 local.properties
 /scrcpy-server
+*.ini
+.vscode/
+/subprojects/.wraplock
+/subprojects/PDCursesMod-*/
+/subprojects/packagecache/

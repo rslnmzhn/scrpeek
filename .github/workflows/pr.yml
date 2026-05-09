@@ -1,0 +1,55 @@
+name: PR
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Bootstrap
+        run: sh tui/scripts/bootstrap.sh
+
+      - name: Configure
+        run: meson setup build -Dcompile_app=false -Dcompile_server=false -Dcompile_tui=true
+
+      - name: Build
+        run: ninja -C build
+
+      - name: Test
+        run: ninja -C build test
+
+  test-windows:
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+
+      - name: Bootstrap
+        run: bash tui/scripts/bootstrap-msys2.sh
+
+      - name: Configure
+        run: meson setup build --wipe -Dcompile_app=false -Dcompile_server=false -Dcompile_tui=true
+
+      - name: Build
+        run: ninja -C build
+
+      - name: Test
+        run: ninja -C build test

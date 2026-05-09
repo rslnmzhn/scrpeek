@@ -1,5 +1,6 @@
 option('compile_app', type: 'boolean', value: true, description: 'Build the client')
 option('compile_server', type: 'boolean', value: true, description: 'Build the server')
+option('compile_tui', type: 'boolean', value: true, description: 'Build the TUI client')
 option('prebuilt_server', type: 'string', description: 'Path of the prebuilt server')
 option('portable', type: 'boolean', value: false, description: 'Use scrcpy-server from the same directory as the scrcpy executable')
 option('static', type: 'boolean', value: false, description: 'Use static dependencies')
