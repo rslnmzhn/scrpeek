@@ -26,6 +26,41 @@
 static bool
 sc_text_backspace(char *text);
 
+static bool
+sc_mouse_scroll_up(const MEVENT *event) {
+#ifdef BUTTON4_PRESSED
+    if (event->bstate & BUTTON4_PRESSED) {
+        return true;
+    }
+#endif
+    return false;
+}
+
+static bool
+sc_mouse_scroll_down(const MEVENT *event) {
+#ifdef BUTTON5_PRESSED
+    if (event->bstate & BUTTON5_PRESSED) {
+        return true;
+    }
+#endif
+    return false;
+}
+
+static bool
+sc_mouse_middle_click(const MEVENT *event) {
+#ifdef BUTTON2_CLICKED
+    if (event->bstate & BUTTON2_CLICKED) {
+        return true;
+    }
+#endif
+#ifdef BUTTON2_PRESSED
+    if (event->bstate & BUTTON2_PRESSED) {
+        return true;
+    }
+#endif
+    return false;
+}
+
 enum sc_field_type {
     SC_FIELD_SECTION,
     SC_FIELD_TEXT,
@@ -206,6 +241,11 @@ sc_field_focusable(enum sc_field_id id) {
     return sc_field_visible(id) && sc_fields[id].type != SC_FIELD_SECTION;
 }
 
+static int
+sc_form_visible_rows(const struct sc_options_form *form) {
+    return form->rows > 6 ? form->rows - 6 : 1;
+}
+
 static bool
 sc_profile_name_append(char *text, size_t cap, int key) {
     if (key == KEY_BACKSPACE || key == 127 || key == 8) {
@@ -256,7 +296,7 @@ sc_form_clamp_scroll(struct sc_options_form *form) {
         ++row;
     }
 
-    int visible = form->rows > 4 ? form->rows - 4 : 1;
+    int visible = sc_form_visible_rows(form);
     if (focus_row < form->scroll) {
         form->scroll = focus_row;
     } else if (focus_row >= form->scroll + visible) {
@@ -549,6 +589,15 @@ sc_options_form_handle_mouse(struct sc_options_form *form, const MEVENT *event,
     if (event->x <= form->x || event->x >= form->x + form->cols - 1) {
         return SC_OPTIONS_FORM_NONE;
     }
+    if (sc_mouse_scroll_up(event)) {
+        return sc_options_form_handle_key(form, KEY_UP, opts);
+    }
+    if (sc_mouse_scroll_down(event)) {
+        return sc_options_form_handle_key(form, KEY_DOWN, opts);
+    }
+    if (sc_mouse_middle_click(event)) {
+        return sc_options_form_handle_key(form, KEY_ENTER, opts);
+    }
     if (event->y == form->y + 1 && event->bstate & (BUTTON1_CLICKED | BUTTON1_DOUBLE_CLICKED | BUTTON1_PRESSED)) {
         int rel = event->x - form->x;
         if (rel >= 22 && rel < 32) {
@@ -572,7 +621,7 @@ sc_options_form_handle_mouse(struct sc_options_form *form, const MEVENT *event,
         return SC_OPTIONS_FORM_LOAD_PROFILE;
     }
     int visible_row = event->y - form->y - 4;
-    if (visible_row < 0 || visible_row >= form->rows - 5) {
+    if (visible_row < 0 || visible_row >= sc_form_visible_rows(form)) {
         return SC_OPTIONS_FORM_NONE;
     }
     int logical_row = form->scroll + visible_row;
@@ -626,7 +675,7 @@ sc_options_form_draw(struct sc_options_form *form,
         }
     }
 
-    int visible = form->rows - 3;
+    int visible = sc_form_visible_rows(form);
     int logical_row = 0;
     int drawn = 0;
     for (int i = 0; i < F_COUNT && drawn < visible; ++i) {
@@ -640,7 +689,7 @@ sc_options_form_draw(struct sc_options_form *form,
 
         const struct sc_field_def *field = &sc_fields[i];
         int y = drawn + 4;
-        if (y >= form->rows - 1) {
+        if (y >= form->rows - 2) {
             break;
         }
         if (field->type == SC_FIELD_SECTION) {

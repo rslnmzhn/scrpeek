@@ -23,6 +23,41 @@ sc_device_panel_visible_rows(const struct sc_device_panel *panel) {
     return panel->rows > 2 ? panel->rows - 2 : 0;
 }
 
+static bool
+sc_mouse_scroll_up(const MEVENT *event) {
+#ifdef BUTTON4_PRESSED
+    if (event->bstate & BUTTON4_PRESSED) {
+        return true;
+    }
+#endif
+    return false;
+}
+
+static bool
+sc_mouse_scroll_down(const MEVENT *event) {
+#ifdef BUTTON5_PRESSED
+    if (event->bstate & BUTTON5_PRESSED) {
+        return true;
+    }
+#endif
+    return false;
+}
+
+static bool
+sc_mouse_middle_click(const MEVENT *event) {
+#ifdef BUTTON2_CLICKED
+    if (event->bstate & BUTTON2_CLICKED) {
+        return true;
+    }
+#endif
+#ifdef BUTTON2_PRESSED
+    if (event->bstate & BUTTON2_PRESSED) {
+        return true;
+    }
+#endif
+    return false;
+}
+
 static void
 sc_device_panel_clamp(struct sc_device_panel *panel,
                       const struct sc_device_list *devices) {
@@ -150,6 +185,16 @@ sc_device_panel_handle_mouse(struct sc_device_panel *panel, const MEVENT *event,
 
     if (event->x <= panel->x || event->x >= panel->x + panel->cols - 1) {
         return SC_DEVICE_PANEL_NONE;
+    }
+
+    if (sc_mouse_scroll_up(event)) {
+        return sc_device_panel_handle_key(panel, KEY_UP, devices);
+    }
+    if (sc_mouse_scroll_down(event)) {
+        return sc_device_panel_handle_key(panel, KEY_DOWN, devices);
+    }
+    if (sc_mouse_middle_click(event)) {
+        return sc_device_panel_handle_key(panel, KEY_ENTER, devices);
     }
 
     int first_row_y = panel->y + 1;

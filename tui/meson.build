@@ -53,3 +53,8 @@ tui_opts_argv_test = executable('scrcpy-tui-test-opts-argv',
                                 c_args: tui_c_args)
 
 test('scrcpy-tui-test-opts-argv', tui_opts_argv_test)
+
+sh = find_program('sh', required: false)
+if sh.found()
+    test('scrcpy-tui-test-next-version', sh, args: files('test/test_next_version.sh'))
+endif
