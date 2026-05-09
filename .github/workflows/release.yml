@@ -47,7 +47,7 @@ jobs:
 
       - name: Package
         run: |
-          DIR="scrcpy-tui_${VERSION}_linux"
+          DIR="scrpeek_${VERSION}_linux"
           mkdir "$DIR"
           cp build/tui/scrcpy-tui "$DIR/"
           cp README.md LICENSE NOTICE "$DIR/"
@@ -56,8 +56,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: scrcpy-tui_${{ env.VERSION }}_linux
-          path: scrcpy-tui_${{ env.VERSION }}_linux.tar.gz
+          name: scrpeek_${{ env.VERSION }}_linux
+          path: scrpeek_${{ env.VERSION }}_linux.tar.gz
           if-no-files-found: error
 
   build-windows:
@@ -89,26 +89,31 @@ jobs:
       - name: Build
         run: ninja -C build
 
-      - name: Bundle adb
+      - name: Bundle adb and scrcpy
         run: |
+          SCRCPY_VERSION=$(python -c "import json; print(json.load(open('build/meson-info/intro-projectinfo.json'))['version'])")
           curl -L -o build/platform-tools-latest-windows.zip https://dl.google.com/android/repository/platform-tools-latest-windows.zip
           rm -rf build/platform-tools
           unzip -q -o build/platform-tools-latest-windows.zip -d build
           cp build/platform-tools/adb.exe build/platform-tools/AdbWinApi.dll build/platform-tools/AdbWinUsbApi.dll build/tui/
+          curl -L -o build/scrcpy-win64.zip https://github.com/Genymobile/scrcpy/releases/download/v${SCRCPY_VERSION}/scrcpy-win64-v${SCRCPY_VERSION}.zip
+          rm -rf build/scrcpy-win64
+          unzip -q -o build/scrcpy-win64.zip -d build/scrcpy-win64
+          cp build/scrcpy-win64/scrcpy-win64-v${SCRCPY_VERSION}/scrcpy.exe build/scrcpy-win64/scrcpy-win64-v${SCRCPY_VERSION}/*.dll build/scrcpy-win64/scrcpy-win64-v${SCRCPY_VERSION}/scrcpy-server build/tui/
 
       - name: Package
         shell: pwsh
         run: |
-          $dir = "scrcpy-tui_${env:VERSION}_windows"
+          $dir = "scrpeek_${env:VERSION}_windows"
           New-Item -ItemType Directory -Path $dir | Out-Null
-          Copy-Item build\tui\scrcpy-tui.exe, build\tui\adb.exe, build\tui\AdbWinApi.dll, build\tui\AdbWinUsbApi.dll, README.md, LICENSE, NOTICE -Destination $dir
+          Copy-Item build\tui\scrcpy-tui.exe, build\tui\adb.exe, build\tui\scrcpy.exe, build\tui\scrcpy-server, build\tui\*.dll, README.md, LICENSE, NOTICE -Destination $dir
           Compress-Archive -Path $dir -DestinationPath "${dir}.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: scrcpy-tui_${{ env.VERSION }}_windows
-          path: scrcpy-tui_${{ env.VERSION }}_windows.zip
+          name: scrpeek_${{ env.VERSION }}_windows
+          path: scrpeek_${{ env.VERSION }}_windows.zip
           if-no-files-found: error
 
   release:
@@ -131,13 +136,13 @@ jobs:
       - name: Download Linux artifact
         uses: actions/download-artifact@v4
         with:
-          name: scrcpy-tui_${{ env.VERSION }}_linux
+          name: scrpeek_${{ env.VERSION }}_linux
           path: .
 
       - name: Download Windows artifact
         uses: actions/download-artifact@v4
         with:
-          name: scrcpy-tui_${{ env.VERSION }}_windows
+          name: scrpeek_${{ env.VERSION }}_windows
           path: .
 
       - name: Create tag
@@ -151,6 +156,6 @@ jobs:
           tag_name: v${{ env.VERSION }}
           name: v${{ env.VERSION }}
           files: |
-            scrcpy-tui_${{ env.VERSION }}_linux.tar.gz
-            scrcpy-tui_${{ env.VERSION }}_windows.zip
+            scrpeek_${{ env.VERSION }}_linux.tar.gz
+            scrpeek_${{ env.VERSION }}_windows.zip
           generate_release_notes: true
