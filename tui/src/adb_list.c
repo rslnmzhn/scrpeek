@@ -437,6 +437,41 @@ sc_read_adb_devices(void) {
     return buf;
 }
 
+bool
+sc_adb_connect(const char *endpoint) {
+    if (!endpoint || !endpoint[0]) {
+        errno = EINVAL;
+        return false;
+    }
+
+    char *adb = sc_find_adb();
+    if (!adb) {
+        return false;
+    }
+
+    char quoted_adb[1024];
+    char quoted_endpoint[256];
+    if (!sc_quote_command_arg(adb, quoted_adb, sizeof(quoted_adb))
+            || !sc_quote_command_arg(endpoint, quoted_endpoint, sizeof(quoted_endpoint))) {
+        free(adb);
+        return false;
+    }
+
+    char command[1300];
+    int written = snprintf(command, sizeof(command), "%s connect %s", quoted_adb,
+                           quoted_endpoint);
+    free(adb);
+    if (written < 0 || (size_t) written >= sizeof(command)) {
+        errno = ENAMETOOLONG;
+        return false;
+    }
+
+    char buf[512];
+    return sc_popen_silent(command, buf, sizeof(buf)) >= 0
+            && strstr(buf, "failed to connect") == NULL
+            && strstr(buf, "cannot connect") == NULL;
+}
+
 static bool
 sc_parse_device_line(char *line, struct sc_device *device) {
     if (!line[0] || line[0] == '*') {

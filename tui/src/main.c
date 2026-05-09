@@ -44,6 +44,7 @@
 
 #define SC_REFRESH_INTERVAL_MS 2000
 #define SC_EVENT_REFRESH (KEY_MAX + 101)
+#define SC_CONNECT_INPUT_MAX 63
 
 enum sc_screen {
     SC_SCREEN_DEVICES,
@@ -133,7 +134,7 @@ static void
 sc_draw_footer(WINDOW *win, int rows, int cols, const char *status) {
     wattron(win, COLOR_PAIR(PAIR_STATUS));
     mvwprintw(win, rows - 1, 0, "%-*s", cols,
-              "Up/Down: navigate  Mouse: select  Enter/Double-click: options  q: quit");
+              "Up/Down: navigate  Enter: options  c: connect  r: refresh  q: quit");
     if (status[0]) {
         int x = cols - (int) strlen(status) - 1;
         if (x > 0) {
@@ -141,6 +142,34 @@ sc_draw_footer(WINDOW *win, int rows, int cols, const char *status) {
         }
     }
     wattroff(win, COLOR_PAIR(PAIR_STATUS));
+}
+
+static bool
+sc_connect_input_append(char *text, size_t cap, int key) {
+    if (key == KEY_BACKSPACE || key == 127 || key == 8) {
+        size_t len = strlen(text);
+        if (!len) {
+            return false;
+        }
+        text[len - 1] = '\0';
+        return true;
+    }
+    if (key < 32 || key > 126) {
+        return false;
+    }
+
+    const char *allowed = "0123456789abcdefABCDEF.:[]-";
+    if (!strchr(allowed, key)) {
+        return false;
+    }
+
+    size_t len = strlen(text);
+    if (len + 1 >= cap) {
+        return false;
+    }
+    text[len] = (char) key;
+    text[len + 1] = '\0';
+    return true;
 }
 
 static void
@@ -499,8 +528,10 @@ main(void) {
     enum sc_screen screen = SC_SCREEN_DEVICES;
     char status[80] = "starting";
     char launch_error[512] = "";
+    char connect_input[SC_CONNECT_INPUT_MAX + 1] = "";
     int rows = 0;
     int cols = 0;
+    bool connect_mode = false;
 
 #ifdef SIGWINCH
     signal(SIGWINCH, sc_signal_handler);
@@ -602,11 +633,41 @@ main(void) {
             continue;
         }
 
-        if (key == 'q' || key == 'Q') {
+        if (connect_mode) {
+            if (key == 27) {
+                connect_mode = false;
+                connect_input[0] = '\0';
+                snprintf(status, sizeof(status), "%d device%s", devices.count,
+                         devices.count == 1 ? "" : "s");
+                dirty = true;
+            } else if (key == '\n' || key == '\r' || key == KEY_ENTER) {
+                bool connected = sc_adb_connect(connect_input);
+                (void) sc_refresh_devices(&devices, status, sizeof(status));
+                if (connected) {
+                    snprintf(status, sizeof(status), "connected %s", connect_input);
+                } else {
+                    snprintf(status, sizeof(status), "connect failed: %s", connect_input);
+                }
+                connect_mode = false;
+                connect_input[0] = '\0';
+                dirty = true;
+            } else if (sc_connect_input_append(connect_input, sizeof(connect_input), key)) {
+                snprintf(status, sizeof(status), "connect %s", connect_input);
+                dirty = true;
+            }
+        } else if (key == 'q' || key == 'Q') {
             running = false;
         } else if (screen == SC_SCREEN_DEVICES) {
             enum sc_device_panel_action action = SC_DEVICE_PANEL_NONE;
-            if (key == KEY_MOUSE) {
+            if (key == 'r' || key == 'R') {
+                (void) sc_refresh_devices(&devices, status, sizeof(status));
+                dirty = true;
+            } else if (key == 'c' || key == 'C') {
+                connect_mode = true;
+                connect_input[0] = '\0';
+                snprintf(status, sizeof(status), "connect ip:port");
+                dirty = true;
+            } else if (key == KEY_MOUSE) {
                 MEVENT event;
                 if (getmouse(&event) == OK) {
                     action = sc_device_panel_handle_mouse(&panel, &event, &devices);
@@ -618,6 +679,7 @@ main(void) {
             if (action == SC_DEVICE_PANEL_ACTIVATE && sc_device_panel_selected(&panel, &devices)) {
                 const struct sc_device *device = sc_device_panel_selected(&panel, &devices);
                 sc_launch_opts_init(&launch_opts, device->serial);
+                sc_options_form_focus_launch(&form);
                 screen = SC_SCREEN_OPTIONS;
                 snprintf(status, sizeof(status), "options for %s", device->serial);
                 dirty = true;
