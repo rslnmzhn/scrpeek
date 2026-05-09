@@ -134,7 +134,7 @@ static void
 sc_draw_footer(WINDOW *win, int rows, int cols, const char *status) {
     wattron(win, COLOR_PAIR(PAIR_STATUS));
     mvwprintw(win, rows - 1, 0, "%-*s", cols,
-              "Up/Down: navigate  Enter: options  c: connect  r: refresh  q: quit");
+              "Up/Down: navigate  Enter: options  F2: connect  F5: refresh  F10: quit");
     if (status[0]) {
         int x = cols - (int) strlen(status) - 1;
         if (x > 0) {
@@ -655,14 +655,14 @@ main(void) {
                 snprintf(status, sizeof(status), "connect %s", connect_input);
                 dirty = true;
             }
-        } else if (key == 'q' || key == 'Q') {
+        } else if (key == 'q' || key == 'Q' || key == KEY_F(10)) {
             running = false;
         } else if (screen == SC_SCREEN_DEVICES) {
             enum sc_device_panel_action action = SC_DEVICE_PANEL_NONE;
-            if (key == 'r' || key == 'R') {
+            if (key == 'r' || key == 'R' || key == KEY_F(5)) {
                 (void) sc_refresh_devices(&devices, status, sizeof(status));
                 dirty = true;
-            } else if (key == 'c' || key == 'C') {
+            } else if (key == 'c' || key == 'C' || key == KEY_F(2)) {
                 connect_mode = true;
                 connect_input[0] = '\0';
                 snprintf(status, sizeof(status), "connect ip:port");
