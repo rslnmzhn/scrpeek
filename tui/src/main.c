@@ -44,6 +44,7 @@
 
 #define SC_REFRESH_INTERVAL_MS 2000
 #define SC_EVENT_REFRESH (KEY_MAX + 101)
+#define SC_EVENT_CONNECT_DONE (KEY_MAX + 102)
 #define SC_CONNECT_INPUT_MAX 63
 
 enum sc_screen {
@@ -74,6 +75,22 @@ struct sc_refresh_state {
     struct sc_device_list last;
     struct sc_device_list pending;
     char pending_status[80];
+};
+
+struct sc_connect_state {
+#ifdef _WIN32
+    CRITICAL_SECTION lock;
+    HANDLE thread;
+#else
+    pthread_mutex_t lock;
+    pthread_t thread;
+#endif
+    bool lock_started;
+    bool thread_started;
+    bool running;
+    bool done;
+    bool success;
+    char endpoint[SC_CONNECT_INPUT_MAX + 1];
 };
 
 static void
@@ -173,6 +190,44 @@ sc_connect_input_append(char *text, size_t cap, int key) {
 }
 
 static void
+sc_draw_connect_modal(const char *input, bool connecting, int spinner, int rows, int cols) {
+    int modal_rows = 7;
+    int modal_cols = 54;
+    if (modal_cols > cols) {
+        modal_cols = cols;
+    }
+    if (modal_rows > rows) {
+        modal_rows = rows;
+    }
+
+    int y = (rows - modal_rows) / 2;
+    int x = (cols - modal_cols) / 2;
+    if (y < 0) {
+        y = 0;
+    }
+    if (x < 0) {
+        x = 0;
+    }
+
+    WINDOW *win = newwin(modal_rows, modal_cols, y, x);
+    if (!win) {
+        return;
+    }
+
+    SC_BOX(win);
+    mvwprintw(win, 0, 2, " Connect Wi-Fi device ");
+    mvwprintw(win, 2, 2, "Address: %-*.*s", modal_cols - 12, modal_cols - 12, input);
+    if (connecting) {
+        static const char frames[] = "/-\\|";
+        mvwprintw(win, 4, 2, "Connecting %c", frames[spinner % 4]);
+    } else {
+        mvwprintw(win, 4, 2, "Enter: connect  Esc: cancel");
+    }
+    wnoutrefresh(win);
+    delwin(win);
+}
+
+static void
 sc_draw_too_small(WINDOW *win, int rows, int cols) {
     werase(win);
     if (rows > 0 && cols > 0) {
@@ -232,6 +287,34 @@ sc_refresh_unlock(struct sc_refresh_state *state) {
     LeaveCriticalSection(&state->lock);
 #else
     pthread_mutex_unlock(&state->lock);
+#endif
+}
+
+static void
+sc_connect_lock(struct sc_connect_state *state) {
+#ifdef _WIN32
+    EnterCriticalSection(&state->lock);
+#else
+    pthread_mutex_lock(&state->lock);
+#endif
+}
+
+static void
+sc_connect_unlock(struct sc_connect_state *state) {
+#ifdef _WIN32
+    LeaveCriticalSection(&state->lock);
+#else
+    pthread_mutex_unlock(&state->lock);
+#endif
+}
+
+static void
+sc_connect_wake(void) {
+#ifdef _WIN32
+    ungetch(SC_EVENT_CONNECT_DONE);
+#else
+    sc_refresh_requested = 1;
+    pthread_kill(sc_main_thread, SIGUSR1);
 #endif
 }
 
@@ -409,6 +492,130 @@ sc_refresh_take_update(struct sc_refresh_state *state, struct sc_device_list *de
     return has_update;
 }
 
+static void
+sc_connect_state_destroy(struct sc_connect_state *state);
+
+static void
+sc_connect_worker_run(struct sc_connect_state *state) {
+    sc_connect_lock(state);
+    char endpoint[sizeof(state->endpoint)];
+    snprintf(endpoint, sizeof(endpoint), "%s", state->endpoint);
+    sc_connect_unlock(state);
+
+    bool success = sc_adb_connect(endpoint);
+
+    sc_connect_lock(state);
+    state->success = success;
+    state->running = false;
+    state->done = true;
+    sc_connect_unlock(state);
+    sc_connect_wake();
+}
+
+#ifdef _WIN32
+static unsigned __stdcall
+sc_connect_thread_main(void *data) {
+    sc_connect_worker_run(data);
+    return 0;
+}
+#else
+static void *
+sc_connect_thread_main(void *data) {
+    sc_connect_worker_run(data);
+    return NULL;
+}
+#endif
+
+static bool
+sc_connect_state_init(struct sc_connect_state *state) {
+    memset(state, 0, sizeof(*state));
+#ifdef _WIN32
+    InitializeCriticalSection(&state->lock);
+    state->lock_started = true;
+#else
+    if (pthread_mutex_init(&state->lock, NULL)) {
+        return false;
+    }
+    state->lock_started = true;
+#endif
+    return true;
+}
+
+static bool
+sc_connect_start(struct sc_connect_state *state, const char *endpoint) {
+    sc_connect_lock(state);
+    if (state->running || state->thread_started) {
+        sc_connect_unlock(state);
+        return false;
+    }
+    snprintf(state->endpoint, sizeof(state->endpoint), "%s", endpoint);
+    state->running = true;
+    state->done = false;
+    state->success = false;
+    sc_connect_unlock(state);
+
+#ifdef _WIN32
+    state->thread = (HANDLE) _beginthreadex(NULL, 0, sc_connect_thread_main, state, 0, NULL);
+    state->thread_started = state->thread != NULL;
+#else
+    state->thread_started = pthread_create(&state->thread, NULL, sc_connect_thread_main, state) == 0;
+#endif
+    if (!state->thread_started) {
+        sc_connect_lock(state);
+        state->running = false;
+        sc_connect_unlock(state);
+        return false;
+    }
+    return true;
+}
+
+static bool
+sc_connect_take_done(struct sc_connect_state *state, bool *success) {
+    sc_connect_lock(state);
+    bool done = state->done;
+    if (done) {
+        *success = state->success;
+        state->done = false;
+    }
+    sc_connect_unlock(state);
+    return done;
+}
+
+static void
+sc_connect_join_finished(struct sc_connect_state *state) {
+    if (!state->thread_started) {
+        return;
+    }
+#ifdef _WIN32
+    WaitForSingleObject(state->thread, INFINITE);
+    CloseHandle(state->thread);
+    state->thread = NULL;
+#else
+    pthread_join(state->thread, NULL);
+#endif
+    state->thread_started = false;
+}
+
+static bool
+sc_connect_is_running(struct sc_connect_state *state) {
+    sc_connect_lock(state);
+    bool running = state->running;
+    sc_connect_unlock(state);
+    return running;
+}
+
+static void
+sc_connect_state_destroy(struct sc_connect_state *state) {
+    sc_connect_join_finished(state);
+    if (state->lock_started) {
+#ifdef _WIN32
+        DeleteCriticalSection(&state->lock);
+#else
+        pthread_mutex_destroy(&state->lock);
+#endif
+    }
+}
+
 static bool
 sc_refresh_devices(struct sc_device_list *devices, char *status,
                    size_t status_len) {
@@ -466,7 +673,8 @@ static void
 sc_render(enum sc_screen screen, struct sc_device_panel *panel,
           struct sc_options_form *form, struct sc_error_panel *error_panel,
           const struct sc_device_list *devices, const struct sc_launch_opts *launch_opts,
-          const char *status, const char *launch_error, int rows, int cols) {
+          const char *status, const char *launch_error, const char *connect_input,
+          bool connect_mode, bool connect_running, int connect_spinner, int rows, int cols) {
     bool too_small = rows < SC_TUI_MIN_ROWS || cols < SC_TUI_MIN_COLS;
     if (too_small) {
         sc_draw_too_small(stdscr, rows, cols);
@@ -485,6 +693,9 @@ sc_render(enum sc_screen screen, struct sc_device_panel *panel,
         sc_options_form_draw(form, launch_opts);
     } else {
         sc_error_panel_draw(error_panel, "Launch failed", launch_error);
+    }
+    if (connect_mode) {
+        sc_draw_connect_modal(connect_input, connect_running, connect_spinner, rows, cols);
     }
     doupdate();
 }
@@ -518,10 +729,12 @@ main(void) {
     bool form_started = false;
     bool error_started = false;
     bool refresh_started = false;
+    bool connect_started = false;
     struct sc_device_panel panel;
     struct sc_options_form form;
     struct sc_error_panel error_panel;
     struct sc_refresh_state refresh_state;
+    struct sc_connect_state connect_state;
     struct sc_device_list devices = {0};
     struct sc_launch_opts launch_opts;
     const char *launch_argv[96];
@@ -532,6 +745,7 @@ main(void) {
     int rows = 0;
     int cols = 0;
     bool connect_mode = false;
+    int connect_spinner = 0;
 
 #ifdef SIGWINCH
     signal(SIGWINCH, sc_signal_handler);
@@ -575,6 +789,10 @@ main(void) {
         goto cleanup;
     }
     error_started = true;
+    if (!sc_connect_state_init(&connect_state)) {
+        goto cleanup;
+    }
+    connect_started = true;
 
     (void) sc_refresh_devices(&devices, status, sizeof(status));
     if (!sc_refresh_state_init(&refresh_state, &devices, status)) {
@@ -586,7 +804,8 @@ main(void) {
 
     /* Draw initial state before blocking on getch(). */
     sc_render(screen, &panel, &form, &error_panel, &devices, &launch_opts,
-              status, launch_error, rows, cols);
+              status, launch_error, connect_input, connect_mode,
+              sc_connect_is_running(&connect_state), connect_spinner, rows, cols);
 
     while (running && !sc_exit_requested) {
         bool dirty = false;
@@ -604,14 +823,35 @@ main(void) {
             dirty = true;
         }
 
+        bool connect_done_success = false;
+        if (connect_started && sc_connect_take_done(&connect_state, &connect_done_success)) {
+            sc_connect_join_finished(&connect_state);
+            timeout(-1);
+            (void) sc_refresh_devices(&devices, status, sizeof(status));
+            if (connect_done_success) {
+                snprintf(status, sizeof(status), "connected");
+            } else {
+                snprintf(status, sizeof(status), "connect failed");
+            }
+            connect_mode = false;
+            connect_input[0] = '\0';
+            dirty = true;
+        }
+
         if (dirty) {
             sc_render(screen, &panel, &form, &error_panel, &devices, &launch_opts,
-                      status, launch_error, rows, cols);
+                      status, launch_error, connect_input, connect_mode,
+                      sc_connect_is_running(&connect_state), connect_spinner, rows, cols);
             continue;
         }
 
         int key = getch();
-        if (key == SC_EVENT_REFRESH || sc_refresh_requested) {
+        if (key == ERR && connect_mode && sc_connect_is_running(&connect_state)) {
+            ++connect_spinner;
+            dirty = true;
+        } else if (key == SC_EVENT_CONNECT_DONE) {
+            dirty = true;
+        } else if (key == SC_EVENT_REFRESH || sc_refresh_requested) {
             sc_refresh_requested = 0;
             if (sc_refresh_take_update(&refresh_state, &devices, status, sizeof(status))) {
                 if (screen == SC_SCREEN_DEVICES) {
@@ -628,30 +868,31 @@ main(void) {
                     goto cleanup;
                 }
                 sc_render(screen, &panel, &form, &error_panel, &devices, &launch_opts,
-                          status, launch_error, rows, cols);
+                          status, launch_error, connect_input, connect_mode,
+                          sc_connect_is_running(&connect_state), connect_spinner, rows, cols);
             }
             continue;
         }
 
         if (connect_mode) {
-            if (key == 27) {
+            bool connect_running = sc_connect_is_running(&connect_state);
+            if (key == 27 && !connect_running) {
                 connect_mode = false;
                 connect_input[0] = '\0';
                 snprintf(status, sizeof(status), "%d device%s", devices.count,
                          devices.count == 1 ? "" : "s");
                 dirty = true;
-            } else if (key == '\n' || key == '\r' || key == KEY_ENTER) {
-                bool connected = sc_adb_connect(connect_input);
-                (void) sc_refresh_devices(&devices, status, sizeof(status));
-                if (connected) {
-                    snprintf(status, sizeof(status), "connected %s", connect_input);
+            } else if ((key == '\n' || key == '\r' || key == KEY_ENTER) && !connect_running) {
+                if (connect_input[0] && sc_connect_start(&connect_state, connect_input)) {
+                    timeout(120);
+                    connect_spinner = 0;
+                    snprintf(status, sizeof(status), "connecting %s", connect_input);
                 } else {
-                    snprintf(status, sizeof(status), "connect failed: %s", connect_input);
+                    snprintf(status, sizeof(status), "connect failed");
                 }
-                connect_mode = false;
-                connect_input[0] = '\0';
                 dirty = true;
-            } else if (sc_connect_input_append(connect_input, sizeof(connect_input), key)) {
+            } else if (!connect_running
+                    && sc_connect_input_append(connect_input, sizeof(connect_input), key)) {
                 snprintf(status, sizeof(status), "connect %s", connect_input);
                 dirty = true;
             }
@@ -786,7 +1027,8 @@ main(void) {
                 goto cleanup;
             }
             sc_render(screen, &panel, &form, &error_panel, &devices, &launch_opts,
-                      status, launch_error, rows, cols);
+                      status, launch_error, connect_input, connect_mode,
+                      sc_connect_is_running(&connect_state), connect_spinner, rows, cols);
         }
     }
 
@@ -795,6 +1037,9 @@ main(void) {
 cleanup:
     if (refresh_started) {
         sc_refresh_state_destroy(&refresh_state);
+    }
+    if (connect_started) {
+        sc_connect_state_destroy(&connect_state);
     }
     sc_device_list_free(&devices);
     if (panel_started) {
