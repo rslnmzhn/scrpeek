@@ -571,8 +571,8 @@ sc_options_form_handle_mouse(struct sc_options_form *form, const MEVENT *event,
         form->profile_selected = event->y - form->y - 2;
         return SC_OPTIONS_FORM_LOAD_PROFILE;
     }
-    int visible_row = event->y - form->y - 1;
-    if (visible_row < 0 || visible_row >= form->rows - 2) {
+    int visible_row = event->y - form->y - 4;
+    if (visible_row < 0 || visible_row >= form->rows - 5) {
         return SC_OPTIONS_FORM_NONE;
     }
     int logical_row = form->scroll + visible_row;
