@@ -125,7 +125,7 @@ sc_init_curses_modes(void) {
 static void
 sc_draw_header(WINDOW *win, int cols) {
     wattron(win, COLOR_PAIR(PAIR_HEADER));
-    mvwprintw(win, 0, 0, "%-*s", cols, "scrcpy-tui");
+    mvwprintw(win, 0, 0, "%-*s", cols, "scrpeek");
     wattroff(win, COLOR_PAIR(PAIR_HEADER));
 }
 

@@ -254,7 +254,7 @@ sc_launch(const char *const argv[], char *error, size_t error_len) {
 
     char *scrcpy_path = sc_find_scrcpy();
     if (!scrcpy_path) {
-        snprintf(error, error_len, "scrcpy binary not found. Set SCRCPY_PATH or put %s beside scrcpy-tui.",
+        snprintf(error, error_len, "scrcpy binary not found. Set SCRCPY_PATH or put %s beside scrpeek.",
                  SC_SCRCPY_EXE);
         return -1;
     }

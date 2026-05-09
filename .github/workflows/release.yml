@@ -49,7 +49,7 @@ jobs:
         run: |
           DIR="scrpeek_${VERSION}_linux"
           mkdir "$DIR"
-          cp build/tui/scrcpy-tui "$DIR/"
+          cp build/tui/scrpeek "$DIR/"
           cp README.md LICENSE NOTICE "$DIR/"
           tar -czf "${DIR}.tar.gz" "$DIR"
 
@@ -106,7 +106,7 @@ jobs:
         run: |
           $dir = "scrpeek_${env:VERSION}_windows"
           New-Item -ItemType Directory -Path $dir | Out-Null
-          Copy-Item build\tui\scrcpy-tui.exe, build\tui\adb.exe, build\tui\scrcpy.exe, build\tui\scrcpy-server, build\tui\*.dll, README.md, LICENSE, NOTICE -Destination $dir
+          Copy-Item build\tui\scrpeek.exe, build\tui\adb.exe, build\tui\scrcpy.exe, build\tui\scrcpy-server, build\tui\*.dll, README.md, LICENSE, NOTICE -Destination $dir
           Compress-Archive -Path $dir -DestinationPath "${dir}.zip"
 
       - name: Upload artifact
