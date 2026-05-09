@@ -151,7 +151,7 @@ static void
 sc_draw_footer(WINDOW *win, int rows, int cols, const char *status) {
     wattron(win, COLOR_PAIR(PAIR_STATUS));
     mvwprintw(win, rows - 1, 0, "%-*s", cols,
-              "Up/Down: navigate  Enter: options  F2: connect  F5: refresh  F10: quit");
+              "Enter: options  F2: connect  F5: refresh  F8: forget  F10: quit");
     if (status[0]) {
         int x = cols - (int) strlen(status) - 1;
         if (x > 0) {
@@ -902,6 +902,19 @@ main(void) {
             enum sc_device_panel_action action = SC_DEVICE_PANEL_NONE;
             if (key == 'r' || key == 'R' || key == KEY_F(5)) {
                 (void) sc_refresh_devices(&devices, status, sizeof(status));
+                dirty = true;
+            } else if (key == 'd' || key == 'D' || key == KEY_DC || key == KEY_F(8)) {
+                const struct sc_device *device = sc_device_panel_selected(&panel, &devices);
+                if (!device) {
+                    snprintf(status, sizeof(status), "no device selected");
+                } else if (!strchr(device->serial, ':')) {
+                    snprintf(status, sizeof(status), "forget is for Wi-Fi devices");
+                } else if (sc_adb_disconnect(device->serial)) {
+                    (void) sc_refresh_devices(&devices, status, sizeof(status));
+                    snprintf(status, sizeof(status), "forgot %s", device->serial);
+                } else {
+                    snprintf(status, sizeof(status), "forget failed: %s", device->serial);
+                }
                 dirty = true;
             } else if (key == 'c' || key == 'C' || key == KEY_F(2)) {
                 connect_mode = true;

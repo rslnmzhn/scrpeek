@@ -39,6 +39,9 @@ sc_device_list_get(struct sc_device_list *out);
 bool
 sc_adb_connect(const char *endpoint);
 
+bool
+sc_adb_disconnect(const char *serial);
+
 void
 sc_device_list_free(struct sc_device_list *list);
 
