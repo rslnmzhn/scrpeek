@@ -17,6 +17,8 @@
 #ifndef SC_TUI_ADB_LIST_H
 #define SC_TUI_ADB_LIST_H
 
+#include <stdbool.h>
+
 struct sc_device {
     char serial[64];
     char model[64];
@@ -33,6 +35,12 @@ sc_popen_silent(const char *cmd, char *buf, unsigned int buf_size);
 
 int
 sc_device_list_get(struct sc_device_list *out);
+
+bool
+sc_adb_connect(const char *endpoint);
+
+bool
+sc_adb_disconnect(const char *serial);
 
 void
 sc_device_list_free(struct sc_device_list *list);

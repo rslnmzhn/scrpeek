@@ -18,7 +18,7 @@ else
     tui_platform_deps += dependency('threads')
 endif
 
-executable('scrcpy-tui',
+executable('scrpeek',
            [
                'src/adb_list.c',
                'src/config.c',
@@ -35,7 +35,7 @@ executable('scrcpy-tui',
            link_args: tui_link_args,
            install: true)
 
-tui_adb_test = executable('scrcpy-tui-adb-test',
+tui_adb_test = executable('scrpeek-adb-test',
                           [
                               'src/adb_list.c',
                               'src/adb_list_test.c',
@@ -44,7 +44,7 @@ tui_adb_test = executable('scrcpy-tui-adb-test',
                           dependencies: tui_platform_deps,
                           c_args: tui_c_args)
 
-tui_opts_argv_test = executable('scrcpy-tui-test-opts-argv',
+tui_opts_argv_test = executable('scrpeek-test-opts-argv',
                                 [
                                     'test/test_opts_argv.c',
                                     'src/launch_opts.c',
@@ -52,9 +52,9 @@ tui_opts_argv_test = executable('scrcpy-tui-test-opts-argv',
                                 include_directories: tui_src_dir,
                                 c_args: tui_c_args)
 
-test('scrcpy-tui-test-opts-argv', tui_opts_argv_test)
+test('scrpeek-test-opts-argv', tui_opts_argv_test)
 
 sh = find_program('sh', required: false)
 if sh.found()
-    test('scrcpy-tui-test-next-version', sh, args: files('test/test_next_version.sh'))
+    test('scrpeek-test-next-version', sh, args: files('test/test_next_version.sh'))
 endif

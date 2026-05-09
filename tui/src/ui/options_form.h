@@ -80,6 +80,9 @@ void
 sc_options_form_profile_close(struct sc_options_form *form);
 
 void
+sc_options_form_focus_launch(struct sc_options_form *form);
+
+void
 sc_options_form_draw(struct sc_options_form *form,
                      const struct sc_launch_opts *opts);
 

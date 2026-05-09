@@ -11,6 +11,6 @@ pacman -S --needed --noconfirm \
 
 if [ ! -f /mingw64/lib/libpdcurses.a ]; then
     echo "mingw-w64-x86_64-pdcurses did not install /mingw64/lib/libpdcurses.a" >&2
-    echo "Static PDCurses is required for a self-contained scrcpy-tui.exe" >&2
+    echo "Static PDCurses is required for a self-contained scrpeek.exe" >&2
     exit 1
 fi

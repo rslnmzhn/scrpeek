@@ -1,4 +1,4 @@
-# scrcpy-tui
+# scrpeek
 
 Terminal user interface for selecting Android devices and launching scrcpy with saved profiles.
 
@@ -35,7 +35,7 @@ ninja -C build
 ## Usage
 
 ```sh
-./build/tui/scrcpy-tui
+./build/tui/scrpeek
 ```
 
 Launches the TUI with no arguments, then lets you select a device and options interactively.

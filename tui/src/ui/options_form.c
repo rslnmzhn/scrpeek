@@ -72,6 +72,7 @@ enum sc_field_type {
 
 enum sc_field_id {
     F_PROFILE,
+    F_LAUNCH,
     F_VIDEO,
     F_MAX_SIZE,
     F_MAX_FPS,
@@ -110,7 +111,6 @@ enum sc_field_id {
     F_NO_DOWNSIZE,
     F_VERBOSITY,
     F_BACK,
-    F_LAUNCH,
     F_COUNT,
 };
 
@@ -123,6 +123,7 @@ struct sc_field_def {
 
 static const struct sc_field_def sc_fields[] = {
     {F_PROFILE, SC_FIELD_BUTTON, "Profile", "Load, save, or delete named launch profiles"},
+    {F_LAUNCH, SC_FIELD_BUTTON, "Launch", "Build argv and launch scrcpy"},
     {F_VIDEO, SC_FIELD_SECTION, "Video", "Video capture and recording options"},
     {F_MAX_SIZE, SC_FIELD_NUMERIC, "Max size", "--max-size value: limit width and height"},
     {F_MAX_FPS, SC_FIELD_NUMERIC, "Max FPS", "--max-fps value: limit capture framerate"},
@@ -161,7 +162,6 @@ static const struct sc_field_def sc_fields[] = {
     {F_NO_DOWNSIZE, SC_FIELD_CHECKBOX, "No downsize", "--no-downsize-on-error"},
     {F_VERBOSITY, SC_FIELD_SELECT, "Verbosity", "--verbosity verbose|debug|info|warn|error"},
     {F_BACK, SC_FIELD_BUTTON, "Back", "Return to device list"},
-    {F_LAUNCH, SC_FIELD_BUTTON, "Launch", "Build argv and launch scrcpy"},
 };
 
 static const char *const video_codecs[] = {"h264", "h265", "av1"};
@@ -219,6 +219,14 @@ sc_options_form_set_message(struct sc_options_form *form, const char *message) {
 void
 sc_options_form_profile_close(struct sc_options_form *form) {
     form->profile_mode = SC_PROFILE_IDLE;
+}
+
+void
+sc_options_form_focus_launch(struct sc_options_form *form) {
+    form->focus = F_LAUNCH;
+    form->scroll = 0;
+    form->profile_mode = SC_PROFILE_IDLE;
+    form->help[0] = '\0';
 }
 
 static bool
@@ -456,7 +464,7 @@ sc_options_form_init(struct sc_options_form *form, int y, int x, int rows,
     form->x = x;
     form->rows = rows;
     form->cols = cols;
-    form->focus = F_MAX_SIZE;
+    form->focus = F_LAUNCH;
     form->scroll = 0;
     form->profile_mode = SC_PROFILE_IDLE;
     form->profile_count = 0;
