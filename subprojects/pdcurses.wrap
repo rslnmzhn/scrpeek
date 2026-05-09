@@ -2,5 +2,5 @@
 directory = PDCursesMod-4.5.4
 source_url = https://github.com/Bill-Gray/PDCursesMod/archive/refs/tags/v4.5.4.tar.gz
 source_filename = PDCursesMod-4.5.4.tar.gz
-source_hash = skip
+source_hash = d5efc7f2b7107abe382bdf8bac0a9bfd8e716facbca2bb9cf12dfeb8e1122c4b
 patch_directory = pdcurses

@@ -443,22 +443,31 @@ sc_profile_key(struct sc_options_form *form, int key) {
     }
     if (key == 27) {
         form->profile_mode = SC_PROFILE_IDLE;
-        return SC_OPTIONS_FORM_NONE;
+        return SC_OPTIONS_FORM_CHANGED;
     }
     if (form->profile_mode == SC_PROFILE_LOAD) {
-        if (key == KEY_UP && form->profile_selected > 0) --form->profile_selected;
-        else if (key == KEY_DOWN && form->profile_selected + 1 < form->profile_count) ++form->profile_selected;
+        if (key == KEY_UP && form->profile_selected > 0) {
+            --form->profile_selected;
+            return SC_OPTIONS_FORM_CHANGED;
+        }
+        if (key == KEY_DOWN && form->profile_selected + 1 < form->profile_count) {
+            ++form->profile_selected;
+            return SC_OPTIONS_FORM_CHANGED;
+        }
         else if (key == '\n' || key == '\r' || key == KEY_ENTER) return SC_OPTIONS_FORM_LOAD_PROFILE;
         return SC_OPTIONS_FORM_NONE;
     }
     if (form->profile_mode == SC_PROFILE_SAVE_AS) {
         if (key == '\n' || key == '\r' || key == KEY_ENTER) return SC_OPTIONS_FORM_SAVE_PROFILE;
         (void) sc_profile_name_append(form->profile_name, sizeof(form->profile_name), key);
-        return SC_OPTIONS_FORM_NONE;
+        return SC_OPTIONS_FORM_CHANGED;
     }
     if (form->profile_mode == SC_PROFILE_DELETE_CONFIRM) {
         if (key == 'y' || key == 'Y') return SC_OPTIONS_FORM_DELETE_PROFILE;
-        if (key != ERR) form->profile_mode = SC_PROFILE_IDLE;
+        if (key != ERR) {
+            form->profile_mode = SC_PROFILE_IDLE;
+            return SC_OPTIONS_FORM_CHANGED;
+        }
     }
     return SC_OPTIONS_FORM_NONE;
 }
@@ -475,7 +484,6 @@ sc_options_form_resize(struct sc_options_form *form, int y, int x, int rows,
     form->cols = cols;
     sc_form_clamp_scroll(form);
     redrawwin(form->win);
-    wrefresh(form->win);
     return true;
 }
 
@@ -495,25 +503,25 @@ sc_options_form_handle_key(struct sc_options_form *form, int key,
             return SC_OPTIONS_FORM_BACK;
         case KEY_F(1):
             snprintf(form->help, sizeof(form->help), "%s", sc_fields[form->focus].help);
-            return SC_OPTIONS_FORM_NONE;
+            return SC_OPTIONS_FORM_CHANGED;
         case '\t':
         case KEY_DOWN:
             form->focus = sc_next_focus(form->focus, 1);
             sc_form_clamp_scroll(form);
-            return SC_OPTIONS_FORM_NONE;
+            return SC_OPTIONS_FORM_CHANGED;
 #ifdef KEY_BTAB
         case KEY_BTAB:
 #endif
         case KEY_UP:
             form->focus = sc_next_focus(form->focus, -1);
             sc_form_clamp_scroll(form);
-            return SC_OPTIONS_FORM_NONE;
+            return SC_OPTIONS_FORM_CHANGED;
         case KEY_LEFT:
             sc_cycle_select(opts, (enum sc_field_id) form->focus, -1);
-            return SC_OPTIONS_FORM_NONE;
+            return SC_OPTIONS_FORM_CHANGED;
         case KEY_RIGHT:
             sc_cycle_select(opts, (enum sc_field_id) form->focus, 1);
-            return SC_OPTIONS_FORM_NONE;
+            return SC_OPTIONS_FORM_CHANGED;
         case ' ':
         case '\n':
         case '\r':
@@ -529,6 +537,7 @@ sc_options_form_handle_key(struct sc_options_form *form, int key,
         char *text = sc_field_text(opts, id, &cap);
         if (text) {
             (void) sc_text_append(text, cap, key, sc_fields[id].type == SC_FIELD_NUMERIC);
+            return SC_OPTIONS_FORM_CHANGED;
         }
     }
     return SC_OPTIONS_FORM_NONE;
@@ -545,16 +554,16 @@ sc_options_form_handle_mouse(struct sc_options_form *form, const MEVENT *event,
         if (rel >= 22 && rel < 32) {
             form->profile_mode = SC_PROFILE_LOAD;
             sc_options_form_profiles_reload(form);
-            return SC_OPTIONS_FORM_NONE;
+            return SC_OPTIONS_FORM_CHANGED;
         }
         if (rel >= 34 && rel < 47) {
             form->profile_mode = SC_PROFILE_SAVE_AS;
             form->profile_name[0] = '\0';
-            return SC_OPTIONS_FORM_NONE;
+            return SC_OPTIONS_FORM_CHANGED;
         }
         if (rel >= 49 && rel < 59) {
             form->profile_mode = SC_PROFILE_DELETE_CONFIRM;
-            return SC_OPTIONS_FORM_NONE;
+            return SC_OPTIONS_FORM_CHANGED;
         }
     }
     if (form->profile_mode == SC_PROFILE_LOAD && event->y > form->y + 1
@@ -580,7 +589,7 @@ sc_options_form_handle_mouse(struct sc_options_form *form, const MEVENT *event,
             if (event->bstate & (BUTTON1_CLICKED | BUTTON1_DOUBLE_CLICKED | BUTTON1_PRESSED)) {
                 return sc_activate(form, opts);
             }
-            return SC_OPTIONS_FORM_NONE;
+            return SC_OPTIONS_FORM_CHANGED;
         }
         ++row;
     }
@@ -591,7 +600,7 @@ void
 sc_options_form_draw(struct sc_options_form *form,
                      const struct sc_launch_opts *opts) {
     werase(form->win);
-    box(form->win, 0, 0);
+    SC_BOX(form->win);
     mvwprintw(form->win, 0, 2, " Options ");
     sc_form_clamp_scroll(form);
 

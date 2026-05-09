@@ -29,6 +29,9 @@ struct sc_device_list {
 };
 
 int
+sc_popen_silent(const char *cmd, char *buf, unsigned int buf_size);
+
+int
 sc_device_list_get(struct sc_device_list *out);
 
 void

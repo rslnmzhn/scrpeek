@@ -180,7 +180,7 @@ void
 sc_log_panel_draw(struct sc_log_panel *panel) {
     werase(panel->win);
     wattron(panel->win, COLOR_PAIR(PAIR_NORMAL));
-    box(panel->win, 0, 0);
+    SC_BOX(panel->win);
     mvwprintw(panel->win, 0, 2, " Log ");
 
     size_t visible = sc_log_panel_visible(panel);

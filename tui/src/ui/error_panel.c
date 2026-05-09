@@ -58,7 +58,6 @@ sc_error_panel_resize(struct sc_error_panel *panel, int term_rows, int term_cols
         return false;
     }
     redrawwin(panel->win);
-    wrefresh(panel->win);
     return true;
 }
 
@@ -80,7 +79,7 @@ void
 sc_error_panel_draw(struct sc_error_panel *panel, const char *title,
                     const char *message) {
     werase(panel->win);
-    box(panel->win, 0, 0);
+    SC_BOX(panel->win);
     wattron(panel->win, COLOR_PAIR(PAIR_HEADER));
     mvwprintw(panel->win, 0, 2, " %s ", title);
     wattroff(panel->win, COLOR_PAIR(PAIR_HEADER));

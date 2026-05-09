@@ -99,7 +99,6 @@ sc_device_panel_resize(struct sc_device_panel *panel, int y, int x, int rows,
     panel->cols = cols;
     sc_device_panel_clamp(panel, devices);
     redrawwin(panel->win);
-    wrefresh(panel->win);
     return true;
 }
 
@@ -112,6 +111,8 @@ sc_device_panel_handle_key(struct sc_device_panel *panel, int key,
         return SC_DEVICE_PANEL_NONE;
     }
 
+    int old_selected = panel->selected;
+    int old_scroll = panel->scroll;
     switch (key) {
         case KEY_UP:
             --panel->selected;
@@ -134,6 +135,9 @@ sc_device_panel_handle_key(struct sc_device_panel *panel, int key,
     }
 
     sc_device_panel_clamp(panel, devices);
+    if (panel->selected == old_selected && panel->scroll == old_scroll) {
+        return SC_DEVICE_PANEL_NONE;
+    }
     return SC_DEVICE_PANEL_SELECTED;
 }
 
@@ -159,6 +163,8 @@ sc_device_panel_handle_mouse(struct sc_device_panel *panel, const MEVENT *event,
         return SC_DEVICE_PANEL_NONE;
     }
 
+    int old_selected = panel->selected;
+    int old_scroll = panel->scroll;
     panel->selected = index;
     sc_device_panel_clamp(panel, devices);
 
@@ -166,6 +172,9 @@ sc_device_panel_handle_mouse(struct sc_device_panel *panel, const MEVENT *event,
         return SC_DEVICE_PANEL_ACTIVATE;
     }
     if (event->bstate & (BUTTON1_CLICKED | BUTTON1_PRESSED | BUTTON1_RELEASED)) {
+        if (panel->selected == old_selected && panel->scroll == old_scroll) {
+            return SC_DEVICE_PANEL_NONE;
+        }
         return SC_DEVICE_PANEL_SELECTED;
     }
 
@@ -177,7 +186,7 @@ sc_device_panel_draw(struct sc_device_panel *panel,
                      const struct sc_device_list *devices) {
     werase(panel->win);
     wattron(panel->win, COLOR_PAIR(PAIR_NORMAL));
-    box(panel->win, 0, 0);
+    SC_BOX(panel->win);
     mvwprintw(panel->win, 0, 2, " Devices ");
 
     sc_device_panel_clamp(panel, devices);

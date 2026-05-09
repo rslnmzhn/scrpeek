@@ -19,12 +19,27 @@
 
 #ifdef _WIN32
 # define NCURSES_MOUSE_VERSION 1
-# include <pdcurses.h>
+# include <curses.h>
+# define SC_HLINE L'─'
+# define SC_VLINE L'│'
+# define SC_ULCORNER L'┌'
+# define SC_URCORNER L'┐'
+# define SC_LLCORNER L'└'
+# define SC_LRCORNER L'┘'
 # define SC_TUI_MOUSE_MASK ALL_MOUSE_EVENTS
 #else
 # include <curses.h>
+# define SC_HLINE ACS_HLINE
+# define SC_VLINE ACS_VLINE
+# define SC_ULCORNER ACS_ULCORNER
+# define SC_URCORNER ACS_URCORNER
+# define SC_LLCORNER ACS_LLCORNER
+# define SC_LRCORNER ACS_LRCORNER
 # define SC_TUI_MOUSE_MASK (ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION)
 #endif
+
+#define SC_BOX(win) wborder((win), SC_VLINE, SC_VLINE, SC_HLINE, SC_HLINE, \
+                            SC_ULCORNER, SC_URCORNER, SC_LLCORNER, SC_LRCORNER)
 
 #define SC_TUI_MIN_COLS 80
 #define SC_TUI_MIN_ROWS 24

@@ -29,14 +29,10 @@
 
 #ifdef _WIN32
 # include <windows.h>
-# define SC_POPEN _popen
-# define SC_PCLOSE _pclose
 # define SC_ADB_EXE "adb.exe"
 # define SC_PATH_SEP '\\'
 #else
 # include <unistd.h>
-# define SC_POPEN popen
-# define SC_PCLOSE pclose
 # define SC_ADB_EXE "adb"
 # define SC_PATH_SEP '/'
 #endif
@@ -267,6 +263,145 @@ sc_quote_command_arg(const char *arg, char *dst, size_t dst_size) {
     return true;
 }
 
+#ifdef _WIN32
+int
+sc_popen_silent(const char *cmd, char *buf, unsigned int buf_size) {
+    if (!cmd || !buf || buf_size == 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    buf[0] = '\0';
+
+    SECURITY_ATTRIBUTES sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+
+    HANDLE read_pipe = NULL;
+    HANDLE write_pipe = NULL;
+    HANDLE nul = INVALID_HANDLE_VALUE;
+    PROCESS_INFORMATION pi;
+    STARTUPINFOA si;
+    memset(&pi, 0, sizeof(pi));
+    memset(&si, 0, sizeof(si));
+
+    char *cmdline = sc_strdup(cmd);
+    if (!cmdline) {
+        return -1;
+    }
+
+    if (!CreatePipe(&read_pipe, &write_pipe, &sa, 0)) {
+        free(cmdline);
+        errno = EIO;
+        return -1;
+    }
+
+    if (!SetHandleInformation(read_pipe, HANDLE_FLAG_INHERIT, 0)) {
+        CloseHandle(read_pipe);
+        CloseHandle(write_pipe);
+        free(cmdline);
+        errno = EIO;
+        return -1;
+    }
+
+    nul = CreateFileA("NUL", GENERIC_WRITE, FILE_SHARE_WRITE, &sa, OPEN_EXISTING,
+                      FILE_ATTRIBUTE_NORMAL, NULL);
+    if (nul == INVALID_HANDLE_VALUE) {
+        CloseHandle(read_pipe);
+        CloseHandle(write_pipe);
+        free(cmdline);
+        errno = EIO;
+        return -1;
+    }
+
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    si.hStdOutput = write_pipe;
+    si.hStdError = nul;
+
+    BOOL created = CreateProcessA(NULL, cmdline, NULL, NULL, TRUE, CREATE_NO_WINDOW,
+                                  NULL, NULL, &si, &pi);
+    CloseHandle(write_pipe);
+    CloseHandle(nul);
+    free(cmdline);
+
+    if (!created) {
+        CloseHandle(read_pipe);
+        errno = EIO;
+        return -1;
+    }
+
+    unsigned int used = 0;
+    bool read_ok = true;
+    for (;;) {
+        DWORD n = 0;
+        DWORD space = buf_size - used - 1;
+        char scratch[512];
+        char *dst = space > 0 ? buf + used : scratch;
+        DWORD want = space > 0 && space < sizeof(scratch) ? space : sizeof(scratch);
+        if (!ReadFile(read_pipe, dst, want, &n, NULL)) {
+            DWORD err = GetLastError();
+            if (err == ERROR_BROKEN_PIPE) {
+                break;
+            }
+            read_ok = false;
+            break;
+        }
+        if (n == 0) {
+            break;
+        }
+        if (space > 0) {
+            used += n;
+        }
+    }
+    buf[used] = '\0';
+
+    DWORD wait_result = WaitForSingleObject(pi.hProcess, INFINITE);
+    DWORD exit_code = 1;
+    bool exit_ok = wait_result == WAIT_OBJECT_0 && GetExitCodeProcess(pi.hProcess, &exit_code);
+
+    CloseHandle(read_pipe);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+
+    if (!read_ok || !exit_ok || exit_code != 0) {
+        errno = EIO;
+        return -1;
+    }
+    return (int) used;
+}
+#else
+int
+sc_popen_silent(const char *cmd, char *buf, unsigned int buf_size) {
+    if (!cmd || !buf || buf_size == 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    FILE *pipe = popen(cmd, "r");
+    if (!pipe) {
+        return -1;
+    }
+
+    size_t len = fread(buf, 1, buf_size - 1, pipe);
+    buf[len] = '\0';
+    if (ferror(pipe)) {
+        (void) pclose(pipe);
+        errno = EIO;
+        return -1;
+    }
+
+    int status = pclose(pipe);
+    if (status != 0) {
+        errno = EIO;
+        return -1;
+    }
+    return (int) len;
+}
+#endif
+
 static char *
 sc_read_adb_devices(void) {
     char *adb = sc_find_adb();
@@ -281,61 +416,21 @@ sc_read_adb_devices(void) {
     }
 
     char command[1100];
-#ifdef _WIN32
-    int written = snprintf(command, sizeof(command), "\"%s devices -l\"", quoted_adb);
-#else
     int written = snprintf(command, sizeof(command), "%s devices -l", quoted_adb);
-#endif
     free(adb);
     if (written < 0 || (size_t) written >= sizeof(command)) {
         errno = ENAMETOOLONG;
         return NULL;
     }
 
-    FILE *pipe = SC_POPEN(command, "r");
-    if (!pipe) {
-        return NULL;
-    }
-
     size_t cap = 4096;
-    size_t len = 0;
     char *buf = malloc(cap);
     if (!buf) {
-        (void) SC_PCLOSE(pipe);
         return NULL;
     }
 
-    for (;;) {
-        if (len + 1 == cap) {
-            size_t new_cap = cap * 2;
-            char *new_buf = realloc(buf, new_cap);
-            if (!new_buf) {
-                free(buf);
-                (void) SC_PCLOSE(pipe);
-                return NULL;
-            }
-            buf = new_buf;
-            cap = new_cap;
-        }
-
-        size_t n = fread(buf + len, 1, cap - len - 1, pipe);
-        len += n;
-        if (n == 0) {
-            if (ferror(pipe)) {
-                free(buf);
-                (void) SC_PCLOSE(pipe);
-                return NULL;
-            }
-            break;
-        }
-    }
-
-    buf[len] = '\0';
-
-    int status = SC_PCLOSE(pipe);
-    if (status != 0) {
+    if (sc_popen_silent(command, buf, (unsigned int) cap) < 0) {
         free(buf);
-        errno = EIO;
         return NULL;
     }
 

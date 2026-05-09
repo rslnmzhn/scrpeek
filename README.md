@@ -9,7 +9,7 @@ Based on [scrcpy](https://github.com/Genymobile/scrcpy), created by Romain Vimon
 ## Requirements
 
 - `adb` on `PATH` for Linux/macOS; Windows bundles `adb.exe` automatically
-- `scrcpy` installed separately
+- `scrcpy` on `PATH` for Linux/macOS; Windows bundles `scrcpy.exe` automatically
 - `ncurses` on Linux/macOS or PDCurses on Windows
 
 ## Build
@@ -30,7 +30,7 @@ ninja -C build
    meson setup build --wipe && ninja -C build
    ```
 
-3. `adb.exe` is bundled automatically by `build-windows.bat`.
+3. `adb.exe`, `scrcpy.exe`, scrcpy DLLs, and `scrcpy-server` are bundled automatically by `build-windows.bat`.
 
 ## Usage
 

@@ -30,15 +30,20 @@
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
 #ifdef _WIN32
+# include <process.h>
 # include <windows.h>
+#else
+# include <pthread.h>
+# include <unistd.h>
 #endif
 
 #define SC_REFRESH_INTERVAL_MS 2000
-#define SC_INPUT_TIMEOUT_MS 100
+#define SC_EVENT_REFRESH (KEY_MAX + 101)
 
 enum sc_screen {
     SC_SCREEN_DEVICES,
@@ -48,6 +53,27 @@ enum sc_screen {
 
 static volatile sig_atomic_t sc_resize_requested;
 static volatile sig_atomic_t sc_exit_requested;
+static volatile sig_atomic_t sc_refresh_requested;
+#ifndef _WIN32
+static pthread_t sc_main_thread;
+#endif
+
+struct sc_refresh_state {
+#ifdef _WIN32
+    CRITICAL_SECTION lock;
+    HANDLE thread;
+#else
+    pthread_mutex_t lock;
+    pthread_t thread;
+#endif
+    bool lock_started;
+    bool thread_started;
+    bool stop;
+    bool has_update;
+    struct sc_device_list last;
+    struct sc_device_list pending;
+    char pending_status[80];
+};
 
 static void
 sc_signal_handler(int sig) {
@@ -57,23 +83,15 @@ sc_signal_handler(int sig) {
         return;
     }
 #endif
+#ifndef _WIN32
+    if (sig == SIGUSR1) {
+        sc_refresh_requested = 1;
+        return;
+    }
+#endif
     if (sig == SIGTERM || sig == SIGINT) {
         sc_exit_requested = 1;
     }
-}
-
-static long
-sc_monotonic_ms(void) {
-#ifdef _WIN32
-    return (long) GetTickCount64();
-#else
-    struct timespec ts;
-    if (timespec_get(&ts, TIME_UTC) != TIME_UTC) {
-        return 0;
-    }
-
-    return ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
-#endif
 }
 
 static void
@@ -99,7 +117,7 @@ sc_init_curses_modes(void) {
     noecho();
     keypad(stdscr, TRUE);
     curs_set(0);
-    timeout(SC_INPUT_TIMEOUT_MS);
+    timeout(-1);
     mousemask(SC_TUI_MOUSE_MASK, NULL);
     sc_init_colors();
 }
@@ -132,7 +150,234 @@ sc_draw_too_small(WINDOW *win, int rows, int cols) {
         mvwprintw(win, 0, 0, "Terminal too small: need %dx%d", SC_TUI_MIN_COLS,
                   SC_TUI_MIN_ROWS);
     }
-    wrefresh(win);
+    wnoutrefresh(win);
+}
+
+static bool
+sc_device_list_same(const struct sc_device_list *a, const struct sc_device_list *b) {
+    if (a->count != b->count) {
+        return false;
+    }
+
+    for (int i = 0; i < a->count; ++i) {
+        const struct sc_device *da = &a->devices[i];
+        const struct sc_device *db = &b->devices[i];
+        if (strcmp(da->serial, db->serial)
+                || strcmp(da->model, db->model)
+                || strcmp(da->state, db->state)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool
+sc_device_list_clone(struct sc_device_list *dst, const struct sc_device_list *src) {
+    dst->devices = NULL;
+    dst->count = 0;
+    if (src->count <= 0) {
+        return true;
+    }
+
+    dst->devices = malloc((size_t) src->count * sizeof(*dst->devices));
+    if (!dst->devices) {
+        return false;
+    }
+    memcpy(dst->devices, src->devices, (size_t) src->count * sizeof(*dst->devices));
+    dst->count = src->count;
+    return true;
+}
+
+static void
+sc_refresh_lock(struct sc_refresh_state *state) {
+#ifdef _WIN32
+    EnterCriticalSection(&state->lock);
+#else
+    pthread_mutex_lock(&state->lock);
+#endif
+}
+
+static void
+sc_refresh_unlock(struct sc_refresh_state *state) {
+#ifdef _WIN32
+    LeaveCriticalSection(&state->lock);
+#else
+    pthread_mutex_unlock(&state->lock);
+#endif
+}
+
+static void
+sc_sleep_refresh_interval(void) {
+#ifdef _WIN32
+    Sleep(SC_REFRESH_INTERVAL_MS);
+#else
+    struct timespec ts;
+    ts.tv_sec = SC_REFRESH_INTERVAL_MS / 1000;
+    ts.tv_nsec = (SC_REFRESH_INTERVAL_MS % 1000) * 1000000L;
+    nanosleep(&ts, NULL);
+#endif
+}
+
+static void
+sc_refresh_publish(struct sc_refresh_state *state, struct sc_device_list *next,
+                   const char *status) {
+    sc_refresh_lock(state);
+    bool stopped = state->stop;
+    if (!stopped) {
+        sc_device_list_free(&state->pending);
+        if (sc_device_list_clone(&state->pending, next)) {
+            snprintf(state->pending_status, sizeof(state->pending_status), "%s", status);
+            state->has_update = true;
+        }
+    }
+    sc_refresh_unlock(state);
+
+    if (!stopped) {
+#ifdef _WIN32
+        /* PDCurses permits cross-thread ungetch(); no drawing is done off-thread. */
+        ungetch(SC_EVENT_REFRESH);
+#else
+        sc_refresh_requested = 1;
+        pthread_kill(sc_main_thread, SIGUSR1);
+#endif
+    }
+}
+
+static void
+sc_refresh_worker_run(struct sc_refresh_state *state) {
+    for (;;) {
+        sc_sleep_refresh_interval();
+
+        sc_refresh_lock(state);
+        bool stopped = state->stop;
+        sc_refresh_unlock(state);
+        if (stopped) {
+            break;
+        }
+
+        struct sc_device_list next;
+        char next_status[80];
+        int count = sc_device_list_get(&next);
+        if (count < 0) {
+            snprintf(next_status, sizeof(next_status), "adb refresh failed");
+            next.devices = NULL;
+            next.count = 0;
+        } else {
+            snprintf(next_status, sizeof(next_status), "%d device%s", count,
+                     count == 1 ? "" : "s");
+        }
+
+        sc_refresh_lock(state);
+        bool changed = strcmp(state->pending_status, next_status) != 0
+                || !sc_device_list_same(&state->last, &next);
+        if (changed) {
+            sc_device_list_free(&state->last);
+            state->last = next;
+            next.devices = NULL;
+            next.count = 0;
+        }
+        sc_refresh_unlock(state);
+
+        if (changed) {
+            sc_refresh_publish(state, &state->last, next_status);
+        }
+        sc_device_list_free(&next);
+    }
+}
+
+#ifdef _WIN32
+static unsigned __stdcall
+sc_refresh_thread_main(void *data) {
+    sc_refresh_worker_run(data);
+    return 0;
+}
+#else
+static void *
+sc_refresh_thread_main(void *data) {
+    sc_refresh_worker_run(data);
+    return NULL;
+}
+#endif
+
+static void
+sc_refresh_state_destroy(struct sc_refresh_state *state);
+
+static bool
+sc_refresh_state_init(struct sc_refresh_state *state,
+                      const struct sc_device_list *initial, const char *status) {
+    memset(state, 0, sizeof(*state));
+#ifdef _WIN32
+    InitializeCriticalSection(&state->lock);
+    state->lock_started = true;
+#else
+    if (pthread_mutex_init(&state->lock, NULL)) {
+        return false;
+    }
+    state->lock_started = true;
+#endif
+    snprintf(state->pending_status, sizeof(state->pending_status), "%s", status);
+    if (!sc_device_list_clone(&state->last, initial)) {
+        sc_refresh_state_destroy(state);
+        return false;
+    }
+
+#ifdef _WIN32
+    state->thread = (HANDLE) _beginthreadex(NULL, 0, sc_refresh_thread_main, state, 0, NULL);
+    state->thread_started = state->thread != NULL;
+#else
+    state->thread_started = pthread_create(&state->thread, NULL, sc_refresh_thread_main, state) == 0;
+#endif
+    if (!state->thread_started) {
+        sc_refresh_state_destroy(state);
+        return false;
+    }
+    return true;
+}
+
+static void
+sc_refresh_state_destroy(struct sc_refresh_state *state) {
+    if (state->lock_started) {
+        sc_refresh_lock(state);
+        state->stop = true;
+        sc_refresh_unlock(state);
+    }
+    if (state->thread_started) {
+#ifdef _WIN32
+        ungetch(SC_EVENT_REFRESH);
+        WaitForSingleObject(state->thread, INFINITE);
+        CloseHandle(state->thread);
+#else
+        pthread_kill(sc_main_thread, SIGUSR1);
+        pthread_join(state->thread, NULL);
+#endif
+    }
+    sc_device_list_free(&state->last);
+    sc_device_list_free(&state->pending);
+    if (state->lock_started) {
+#ifdef _WIN32
+        DeleteCriticalSection(&state->lock);
+#else
+        pthread_mutex_destroy(&state->lock);
+#endif
+    }
+}
+
+static bool
+sc_refresh_take_update(struct sc_refresh_state *state, struct sc_device_list *devices,
+                       char *status, size_t status_len) {
+    bool has_update;
+    sc_refresh_lock(state);
+    has_update = state->has_update;
+    if (has_update) {
+        sc_device_list_free(devices);
+        *devices = state->pending;
+        state->pending.devices = NULL;
+        state->pending.count = 0;
+        snprintf(status, status_len, "%s", state->pending_status);
+        state->has_update = false;
+    }
+    sc_refresh_unlock(state);
+    return has_update;
 }
 
 static bool
@@ -175,6 +420,67 @@ sc_restart_curses(void) {
     return true;
 }
 
+static bool
+sc_layout_resize(struct sc_device_panel *panel, struct sc_options_form *form,
+                 struct sc_error_panel *error_panel, int rows, int cols,
+                 const struct sc_device_list *devices) {
+    bool too_small = rows < SC_TUI_MIN_ROWS || cols < SC_TUI_MIN_COLS;
+    if (too_small) {
+        return true;
+    }
+    return sc_resize_device_panel(panel, rows, cols, devices)
+            && sc_resize_options_form(form, rows, cols)
+            && sc_error_panel_resize(error_panel, rows, cols);
+}
+
+static void
+sc_render(enum sc_screen screen, struct sc_device_panel *panel,
+          struct sc_options_form *form, struct sc_error_panel *error_panel,
+          const struct sc_device_list *devices, const struct sc_launch_opts *launch_opts,
+          const char *status, const char *launch_error, int rows, int cols) {
+    bool too_small = rows < SC_TUI_MIN_ROWS || cols < SC_TUI_MIN_COLS;
+    if (too_small) {
+        sc_draw_too_small(stdscr, rows, cols);
+        doupdate();
+        return;
+    }
+
+    werase(stdscr);
+    sc_draw_header(stdscr, cols);
+    sc_draw_footer(stdscr, rows, cols, status);
+    wnoutrefresh(stdscr);
+
+    if (screen == SC_SCREEN_DEVICES) {
+        sc_device_panel_draw(panel, devices);
+    } else if (screen == SC_SCREEN_OPTIONS) {
+        sc_options_form_draw(form, launch_opts);
+    } else {
+        sc_error_panel_draw(error_panel, "Launch failed", launch_error);
+    }
+    doupdate();
+}
+
+#ifdef _WIN32
+static bool
+sc_enable_virtual_terminal(void) {
+    SetConsoleOutputCP(65001);
+    SetConsoleCP(65001);
+
+    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (out == INVALID_HANDLE_VALUE || out == NULL) {
+        return false;
+    }
+
+    DWORD mode;
+    if (!GetConsoleMode(out, &mode)) {
+        return false;
+    }
+
+    mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN;
+    return SetConsoleMode(out, mode) != 0;
+}
+#endif
+
 int
 main(void) {
     int ret = 1;
@@ -182,9 +488,11 @@ main(void) {
     bool panel_started = false;
     bool form_started = false;
     bool error_started = false;
+    bool refresh_started = false;
     struct sc_device_panel panel;
     struct sc_options_form form;
     struct sc_error_panel error_panel;
+    struct sc_refresh_state refresh_state;
     struct sc_device_list devices = {0};
     struct sc_launch_opts launch_opts;
     const char *launch_argv[96];
@@ -197,8 +505,19 @@ main(void) {
 #ifdef SIGWINCH
     signal(SIGWINCH, sc_signal_handler);
 #endif
+#ifndef _WIN32
+    sc_main_thread = pthread_self();
+    signal(SIGUSR1, sc_signal_handler);
+#endif
     signal(SIGTERM, sc_signal_handler);
     signal(SIGINT, sc_signal_handler);
+
+#ifdef _WIN32
+    if (!sc_enable_virtual_terminal()) {
+        fputs("Windows 10 1511+ or Windows Terminal required\n", stderr);
+        return 1;
+    }
+#endif
 
     WINDOW *std = initscr();
     if (!std) {
@@ -227,12 +546,19 @@ main(void) {
     error_started = true;
 
     (void) sc_refresh_devices(&devices, status, sizeof(status));
-    long next_refresh = sc_monotonic_ms() + SC_REFRESH_INTERVAL_MS;
+    if (!sc_refresh_state_init(&refresh_state, &devices, status)) {
+        goto cleanup;
+    }
+    refresh_started = true;
     bool running = true;
+    bool first_refresh_rendered = false;
+
+    /* Draw initial state before blocking on getch(). */
+    sc_render(screen, &panel, &form, &error_panel, &devices, &launch_opts,
+              status, launch_error, rows, cols);
 
     while (running && !sc_exit_requested) {
-        getmaxyx(stdscr, rows, cols);
-        bool too_small = rows < SC_TUI_MIN_ROWS || cols < SC_TUI_MIN_COLS;
+        bool dirty = false;
 
         if (sc_resize_requested) {
             sc_resize_requested = 0;
@@ -240,27 +566,42 @@ main(void) {
             refresh();
             clear();
             getmaxyx(stdscr, rows, cols);
-            too_small = rows < SC_TUI_MIN_ROWS || cols < SC_TUI_MIN_COLS;
-            if (!too_small && !sc_resize_device_panel(&panel, rows, cols, &devices)) {
-                goto cleanup;
-            }
-            if (!too_small && !sc_resize_options_form(&form, rows, cols)) {
-                goto cleanup;
-            }
-            if (!too_small && !sc_error_panel_resize(&error_panel, rows, cols)) {
+            if (!sc_layout_resize(&panel, &form, &error_panel, rows, cols, &devices)) {
                 goto cleanup;
             }
             redrawwin(stdscr);
-            wrefresh(stdscr);
+            dirty = true;
         }
 
-        long now = sc_monotonic_ms();
-        if (screen == SC_SCREEN_DEVICES && now >= next_refresh) {
-            (void) sc_refresh_devices(&devices, status, sizeof(status));
-            next_refresh = now + SC_REFRESH_INTERVAL_MS;
+        if (dirty) {
+            sc_render(screen, &panel, &form, &error_panel, &devices, &launch_opts,
+                      status, launch_error, rows, cols);
+            continue;
         }
 
         int key = getch();
+        if (key == SC_EVENT_REFRESH || sc_refresh_requested) {
+            sc_refresh_requested = 0;
+            if (sc_refresh_take_update(&refresh_state, &devices, status, sizeof(status))) {
+                if (screen == SC_SCREEN_DEVICES) {
+                    dirty = true;
+                }
+            }
+            if (!first_refresh_rendered) {
+                dirty = true;
+                first_refresh_rendered = true;
+            }
+            if (dirty) {
+                getmaxyx(stdscr, rows, cols);
+                if (!sc_layout_resize(&panel, &form, &error_panel, rows, cols, &devices)) {
+                    goto cleanup;
+                }
+                sc_render(screen, &panel, &form, &error_panel, &devices, &launch_opts,
+                          status, launch_error, rows, cols);
+            }
+            continue;
+        }
+
         if (key == 'q' || key == 'Q') {
             running = false;
         } else if (screen == SC_SCREEN_DEVICES) {
@@ -279,6 +620,9 @@ main(void) {
                 sc_launch_opts_init(&launch_opts, device->serial);
                 screen = SC_SCREEN_OPTIONS;
                 snprintf(status, sizeof(status), "options for %s", device->serial);
+                dirty = true;
+            } else if (action == SC_DEVICE_PANEL_SELECTED) {
+                dirty = true;
             }
         } else if (screen == SC_SCREEN_OPTIONS) {
             enum sc_options_form_action action = SC_OPTIONS_FORM_NONE;
@@ -295,11 +639,13 @@ main(void) {
                 screen = SC_SCREEN_DEVICES;
                 snprintf(status, sizeof(status), "%d device%s", devices.count,
                          devices.count == 1 ? "" : "s");
+                dirty = true;
             } else if (action == SC_OPTIONS_FORM_LAUNCH) {
                 int argc = sc_launch_opts_to_argv(&launch_opts, launch_argv,
                                                   sizeof(launch_argv) / sizeof(launch_argv[0]));
                 if (argc < 0) {
                     snprintf(status, sizeof(status), "argv too small");
+                    dirty = true;
                 } else {
                     if (sc_launch(launch_argv, launch_error, sizeof(launch_error)) < 0) {
                         if (!sc_restart_curses()) {
@@ -313,6 +659,7 @@ main(void) {
                         }
                         screen = SC_SCREEN_ERROR;
                         snprintf(status, sizeof(status), "launch failed");
+                        dirty = true;
                     }
                 }
             } else if (action == SC_OPTIONS_FORM_SAVE_PROFILE) {
@@ -326,6 +673,7 @@ main(void) {
                 } else {
                     sc_options_form_set_message(&form, "Could not save profile");
                 }
+                dirty = true;
             } else if (action == SC_OPTIONS_FORM_LOAD_PROFILE) {
                 const char *name = sc_options_form_profile_name(&form);
                 char serial[sizeof(launch_opts.serial)];
@@ -339,6 +687,7 @@ main(void) {
                 } else {
                     sc_options_form_set_message(&form, "Could not load profile");
                 }
+                dirty = true;
             } else if (action == SC_OPTIONS_FORM_DELETE_PROFILE) {
                 const char *name = sc_options_form_profile_name(&form);
                 if (name[0] && sc_config_delete(name)) {
@@ -348,6 +697,9 @@ main(void) {
                 } else {
                     sc_options_form_set_message(&form, "Could not delete profile");
                 }
+                dirty = true;
+            } else if (action == SC_OPTIONS_FORM_CHANGED) {
+                dirty = true;
             }
         } else if (screen == SC_SCREEN_ERROR) {
             bool dismiss = false;
@@ -362,41 +714,26 @@ main(void) {
             if (dismiss) {
                 screen = SC_SCREEN_OPTIONS;
                 snprintf(status, sizeof(status), "options");
+                dirty = true;
             }
         }
 
-        if (too_small) {
-            sc_draw_too_small(stdscr, rows, cols);
-            continue;
+        if (dirty) {
+            getmaxyx(stdscr, rows, cols);
+            if (!sc_layout_resize(&panel, &form, &error_panel, rows, cols, &devices)) {
+                goto cleanup;
+            }
+            sc_render(screen, &panel, &form, &error_panel, &devices, &launch_opts,
+                      status, launch_error, rows, cols);
         }
-
-        if (!sc_resize_device_panel(&panel, rows, cols, &devices)) {
-            goto cleanup;
-        }
-        if (!sc_resize_options_form(&form, rows, cols)) {
-            goto cleanup;
-        }
-        if (!sc_error_panel_resize(&error_panel, rows, cols)) {
-            goto cleanup;
-        }
-
-        werase(stdscr);
-        sc_draw_header(stdscr, cols);
-        if (screen == SC_SCREEN_DEVICES) {
-            sc_device_panel_draw(&panel, &devices);
-        } else if (screen == SC_SCREEN_OPTIONS) {
-            sc_options_form_draw(&form, &launch_opts);
-        } else {
-            sc_error_panel_draw(&error_panel, "Launch failed", launch_error);
-        }
-        sc_draw_footer(stdscr, rows, cols, status);
-        wnoutrefresh(stdscr);
-        doupdate();
     }
 
     ret = 0;
 
 cleanup:
+    if (refresh_started) {
+        sc_refresh_state_destroy(&refresh_state);
+    }
     sc_device_list_free(&devices);
     if (panel_started) {
         sc_device_panel_destroy(&panel);
