@@ -40,6 +40,9 @@ bool
 sc_adb_connect(const char *endpoint);
 
 bool
+sc_adb_pair(const char *endpoint, const char *code);
+
+bool
 sc_adb_disconnect(const char *serial);
 
 void

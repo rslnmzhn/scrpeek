@@ -45,7 +45,14 @@
 #define SC_REFRESH_INTERVAL_MS 2000
 #define SC_EVENT_REFRESH (KEY_MAX + 101)
 #define SC_EVENT_CONNECT_DONE (KEY_MAX + 102)
+#define SC_EVENT_RESIZE (KEY_MAX + 103)
 #define SC_CONNECT_INPUT_MAX 63
+#define SC_PAIR_CODE_MAX 15
+
+enum sc_connect_kind {
+    SC_CONNECT_KIND_CONNECT,
+    SC_CONNECT_KIND_PAIR,
+};
 
 enum sc_screen {
     SC_SCREEN_DEVICES,
@@ -90,7 +97,9 @@ struct sc_connect_state {
     bool running;
     bool done;
     bool success;
+    enum sc_connect_kind kind;
     char endpoint[SC_CONNECT_INPUT_MAX + 1];
+    char code[SC_PAIR_CODE_MAX + 1];
 };
 
 static void
@@ -141,6 +150,14 @@ sc_init_curses_modes(void) {
 }
 
 static void
+sc_wake_resize(void) {
+    sc_resize_requested = 1;
+#ifdef _WIN32
+    ungetch(SC_EVENT_RESIZE);
+#endif
+}
+
+static void
 sc_draw_header(WINDOW *win, int cols) {
     wattron(win, COLOR_PAIR(PAIR_HEADER));
     mvwprintw(win, 0, 0, "%-*s", cols, "scrpeek");
@@ -151,7 +168,7 @@ static void
 sc_draw_footer(WINDOW *win, int rows, int cols, const char *status) {
     wattron(win, COLOR_PAIR(PAIR_STATUS));
     mvwprintw(win, rows - 1, 0, "%-*s", cols,
-              "Enter: options  F2: connect  F5: refresh  F8: forget  F10: quit");
+              "Enter: options  F3: connect/pair  F5: refresh  F8: forget  F10: quit");
     if (status[0]) {
         int x = cols - (int) strlen(status) - 1;
         if (x > 0) {
@@ -162,7 +179,7 @@ sc_draw_footer(WINDOW *win, int rows, int cols, const char *status) {
 }
 
 static bool
-sc_connect_input_append(char *text, size_t cap, int key) {
+sc_text_input_append(char *text, size_t cap, int key, const char *allowed) {
     if (key == KEY_BACKSPACE || key == 127 || key == 8) {
         size_t len = strlen(text);
         if (!len) {
@@ -175,8 +192,7 @@ sc_connect_input_append(char *text, size_t cap, int key) {
         return false;
     }
 
-    const char *allowed = "0123456789abcdefABCDEF.:[]-";
-    if (!strchr(allowed, key)) {
+    if (allowed && !strchr(allowed, key)) {
         return false;
     }
 
@@ -189,10 +205,21 @@ sc_connect_input_append(char *text, size_t cap, int key) {
     return true;
 }
 
+static bool
+sc_endpoint_input_append(char *text, size_t cap, int key) {
+    return sc_text_input_append(text, cap, key, "0123456789abcdefABCDEF.:[]-");
+}
+
+static bool
+sc_pair_code_input_append(char *text, size_t cap, int key) {
+    return sc_text_input_append(text, cap, key, "0123456789");
+}
+
 static void
-sc_draw_connect_modal(const char *input, bool connecting, int spinner, int rows, int cols) {
-    int modal_rows = 7;
-    int modal_cols = 54;
+sc_draw_connect_modal(enum sc_connect_kind kind, const char *endpoint, const char *code,
+                      bool code_focused, bool connecting, int spinner, int rows, int cols) {
+    int modal_rows = kind == SC_CONNECT_KIND_PAIR ? 9 : 7;
+    int modal_cols = 62;
     if (modal_cols > cols) {
         modal_cols = cols;
     }
@@ -215,13 +242,25 @@ sc_draw_connect_modal(const char *input, bool connecting, int spinner, int rows,
     }
 
     SC_BOX(win);
-    mvwprintw(win, 0, 2, " Connect Wi-Fi device ");
-    mvwprintw(win, 2, 2, "Address: %-*.*s", modal_cols - 12, modal_cols - 12, input);
+    mvwprintw(win, 0, 2, " Wi-Fi ADB ");
+    mvwprintw(win, 2, 2, "Mode: %s  (Tab: switch)",
+              kind == SC_CONNECT_KIND_PAIR ? "pair" : "connect");
+    mvwprintw(win, 3, 2, "%c Address: %-*.*s", code_focused ? ' ' : '>',
+              modal_cols - 15, modal_cols - 15, endpoint);
+    if (kind == SC_CONNECT_KIND_PAIR) {
+        mvwprintw(win, 4, 2, "%c Code: %-*.*s", code_focused ? '>' : ' ',
+                  modal_cols - 12, modal_cols - 12, code);
+    }
     if (connecting) {
         static const char frames[] = "/-\\|";
-        mvwprintw(win, 4, 2, "Connecting %c", frames[spinner % 4]);
+        mvwprintw(win, modal_rows - 3, 2, "%s %c",
+                  kind == SC_CONNECT_KIND_PAIR ? "Pairing" : "Connecting",
+                  frames[spinner % 4]);
     } else {
-        mvwprintw(win, 4, 2, "Enter: connect  Esc: cancel");
+        const char *hint = kind == SC_CONNECT_KIND_PAIR && !code_focused
+                         ? "Enter: next field  Esc: cancel"
+                         : "Enter: start  Esc: cancel";
+        mvwprintw(win, modal_rows - 3, 2, "%s", hint);
     }
     wnoutrefresh(win);
     delwin(win);
@@ -499,10 +538,15 @@ static void
 sc_connect_worker_run(struct sc_connect_state *state) {
     sc_connect_lock(state);
     char endpoint[sizeof(state->endpoint)];
+    char code[sizeof(state->code)];
+    enum sc_connect_kind kind = state->kind;
     snprintf(endpoint, sizeof(endpoint), "%s", state->endpoint);
+    snprintf(code, sizeof(code), "%s", state->code);
     sc_connect_unlock(state);
 
-    bool success = sc_adb_connect(endpoint);
+    bool success = kind == SC_CONNECT_KIND_PAIR
+                 ? sc_adb_pair(endpoint, code)
+                 : sc_adb_connect(endpoint);
 
     sc_connect_lock(state);
     state->success = success;
@@ -542,13 +586,16 @@ sc_connect_state_init(struct sc_connect_state *state) {
 }
 
 static bool
-sc_connect_start(struct sc_connect_state *state, const char *endpoint) {
+sc_connect_start(struct sc_connect_state *state, enum sc_connect_kind kind,
+                 const char *endpoint, const char *code) {
     sc_connect_lock(state);
     if (state->running || state->thread_started) {
         sc_connect_unlock(state);
         return false;
     }
+    state->kind = kind;
     snprintf(state->endpoint, sizeof(state->endpoint), "%s", endpoint);
+    snprintf(state->code, sizeof(state->code), "%s", code ? code : "");
     state->running = true;
     state->done = false;
     state->success = false;
@@ -669,12 +716,28 @@ sc_layout_resize(struct sc_device_panel *panel, struct sc_options_form *form,
             && sc_error_panel_resize(error_panel, rows, cols);
 }
 
+static bool
+sc_update_terminal_size(struct sc_device_panel *panel, struct sc_options_form *form,
+                        struct sc_error_panel *error_panel, struct sc_device_list *devices,
+                        int *rows, int *cols) {
+    endwin();
+    refresh();
+    clear();
+    getmaxyx(stdscr, *rows, *cols);
+    if (!sc_layout_resize(panel, form, error_panel, *rows, *cols, devices)) {
+        return false;
+    }
+    redrawwin(stdscr);
+    return true;
+}
+
 static void
 sc_render(enum sc_screen screen, struct sc_device_panel *panel,
-          struct sc_options_form *form, struct sc_error_panel *error_panel,
-          const struct sc_device_list *devices, const struct sc_launch_opts *launch_opts,
-          const char *status, const char *launch_error, const char *connect_input,
-          bool connect_mode, bool connect_running, int connect_spinner, int rows, int cols) {
+           struct sc_options_form *form, struct sc_error_panel *error_panel,
+           const struct sc_device_list *devices, const struct sc_launch_opts *launch_opts,
+           const char *status, const char *launch_error, enum sc_connect_kind connect_kind,
+           const char *connect_input, const char *pair_code, bool pair_code_focused,
+           bool connect_mode, bool connect_running, int connect_spinner, int rows, int cols) {
     bool too_small = rows < SC_TUI_MIN_ROWS || cols < SC_TUI_MIN_COLS;
     if (too_small) {
         sc_draw_too_small(stdscr, rows, cols);
@@ -695,7 +758,8 @@ sc_render(enum sc_screen screen, struct sc_device_panel *panel,
         sc_error_panel_draw(error_panel, "Launch failed", launch_error);
     }
     if (connect_mode) {
-        sc_draw_connect_modal(connect_input, connect_running, connect_spinner, rows, cols);
+        sc_draw_connect_modal(connect_kind, connect_input, pair_code, pair_code_focused,
+                              connect_running, connect_spinner, rows, cols);
     }
     doupdate();
 }
@@ -742,17 +806,20 @@ main(void) {
     char status[80] = "starting";
     char launch_error[512] = "";
     char connect_input[SC_CONNECT_INPUT_MAX + 1] = "";
+    char pair_code[SC_PAIR_CODE_MAX + 1] = "";
     int rows = 0;
     int cols = 0;
+    enum sc_connect_kind connect_kind = SC_CONNECT_KIND_CONNECT;
     bool connect_mode = false;
+    bool pair_code_focused = false;
     int connect_spinner = 0;
 
-#ifdef SIGWINCH
-    signal(SIGWINCH, sc_signal_handler);
-#endif
 #ifndef _WIN32
     sc_main_thread = pthread_self();
     signal(SIGUSR1, sc_signal_handler);
+#endif
+#ifdef SIGWINCH
+    signal(SIGWINCH, sc_signal_handler);
 #endif
     signal(SIGTERM, sc_signal_handler);
     signal(SIGINT, sc_signal_handler);
@@ -804,7 +871,8 @@ main(void) {
 
     /* Draw initial state before blocking on getch(). */
     sc_render(screen, &panel, &form, &error_panel, &devices, &launch_opts,
-              status, launch_error, connect_input, connect_mode,
+              status, launch_error, connect_kind, connect_input, pair_code,
+              pair_code_focused, connect_mode,
               sc_connect_is_running(&connect_state), connect_spinner, rows, cols);
 
     while (running && !sc_exit_requested) {
@@ -812,40 +880,49 @@ main(void) {
 
         if (sc_resize_requested) {
             sc_resize_requested = 0;
-            endwin();
-            refresh();
-            clear();
-            getmaxyx(stdscr, rows, cols);
-            if (!sc_layout_resize(&panel, &form, &error_panel, rows, cols, &devices)) {
+            if (!sc_update_terminal_size(&panel, &form, &error_panel, &devices,
+                                         &rows, &cols)) {
                 goto cleanup;
             }
-            redrawwin(stdscr);
             dirty = true;
         }
 
         bool connect_done_success = false;
         if (connect_started && sc_connect_take_done(&connect_state, &connect_done_success)) {
+            const bool was_pair = connect_kind == SC_CONNECT_KIND_PAIR;
             sc_connect_join_finished(&connect_state);
             timeout(-1);
             (void) sc_refresh_devices(&devices, status, sizeof(status));
             if (connect_done_success) {
-                snprintf(status, sizeof(status), "connected");
+                snprintf(status, sizeof(status), "%s", was_pair ? "paired" : "connected");
             } else {
-                snprintf(status, sizeof(status), "connect failed");
+                snprintf(status, sizeof(status), "%s failed", was_pair ? "pair" : "connect");
             }
             connect_mode = false;
             connect_input[0] = '\0';
+            pair_code[0] = '\0';
+            pair_code_focused = false;
             dirty = true;
         }
 
         if (dirty) {
             sc_render(screen, &panel, &form, &error_panel, &devices, &launch_opts,
-                      status, launch_error, connect_input, connect_mode,
+                      status, launch_error, connect_kind, connect_input, pair_code,
+                      pair_code_focused, connect_mode,
                       sc_connect_is_running(&connect_state), connect_spinner, rows, cols);
             continue;
         }
 
         int key = getch();
+#ifdef KEY_RESIZE
+        if (key == KEY_RESIZE) {
+            sc_wake_resize();
+            continue;
+        }
+#endif
+        if (key == SC_EVENT_RESIZE) {
+            continue;
+        }
         if (key == ERR && connect_mode && sc_connect_is_running(&connect_state)) {
             ++connect_spinner;
             dirty = true;
@@ -868,7 +945,8 @@ main(void) {
                     goto cleanup;
                 }
                 sc_render(screen, &panel, &form, &error_panel, &devices, &launch_opts,
-                          status, launch_error, connect_input, connect_mode,
+                          status, launch_error, connect_kind, connect_input, pair_code,
+                          pair_code_focused, connect_mode,
                           sc_connect_is_running(&connect_state), connect_spinner, rows, cols);
             }
             continue;
@@ -879,21 +957,46 @@ main(void) {
             if (key == 27 && !connect_running) {
                 connect_mode = false;
                 connect_input[0] = '\0';
+                pair_code[0] = '\0';
+                pair_code_focused = false;
                 snprintf(status, sizeof(status), "%d device%s", devices.count,
                          devices.count == 1 ? "" : "s");
                 dirty = true;
+            } else if ((key == '\t' || key == KEY_BTAB) && !connect_running) {
+                connect_kind = connect_kind == SC_CONNECT_KIND_PAIR
+                             ? SC_CONNECT_KIND_CONNECT
+                             : SC_CONNECT_KIND_PAIR;
+                pair_code_focused = false;
+                snprintf(status, sizeof(status), "%s ip:port",
+                         connect_kind == SC_CONNECT_KIND_PAIR ? "pair" : "connect");
+                dirty = true;
             } else if ((key == '\n' || key == '\r' || key == KEY_ENTER) && !connect_running) {
-                if (connect_input[0] && sc_connect_start(&connect_state, connect_input)) {
+                if (connect_kind == SC_CONNECT_KIND_PAIR && !pair_code_focused) {
+                    pair_code_focused = true;
+                    snprintf(status, sizeof(status), "pair code");
+                } else if (connect_input[0]
+                        && (connect_kind == SC_CONNECT_KIND_CONNECT || pair_code[0])
+                        && sc_connect_start(&connect_state, connect_kind, connect_input, pair_code)) {
                     timeout(120);
                     connect_spinner = 0;
-                    snprintf(status, sizeof(status), "connecting %s", connect_input);
+                    snprintf(status, sizeof(status), "%s %s",
+                             connect_kind == SC_CONNECT_KIND_PAIR ? "pairing" : "connecting",
+                             connect_input);
                 } else {
-                    snprintf(status, sizeof(status), "connect failed");
+                    snprintf(status, sizeof(status), "%s failed",
+                             connect_kind == SC_CONNECT_KIND_PAIR ? "pair" : "connect");
                 }
                 dirty = true;
-            } else if (!connect_running
-                    && sc_connect_input_append(connect_input, sizeof(connect_input), key)) {
-                snprintf(status, sizeof(status), "connect %s", connect_input);
+            } else if (!connect_running && connect_kind == SC_CONNECT_KIND_PAIR
+                    && pair_code_focused
+                    && sc_pair_code_input_append(pair_code, sizeof(pair_code), key)) {
+                snprintf(status, sizeof(status), "pair code");
+                dirty = true;
+            } else if (!connect_running && !pair_code_focused
+                    && sc_endpoint_input_append(connect_input, sizeof(connect_input), key)) {
+                snprintf(status, sizeof(status), "%s %s",
+                         connect_kind == SC_CONNECT_KIND_PAIR ? "pair" : "connect",
+                         connect_input);
                 dirty = true;
             }
         } else if (key == 'q' || key == 'Q' || key == KEY_F(10)) {
@@ -916,9 +1019,13 @@ main(void) {
                     snprintf(status, sizeof(status), "forget failed: %s", device->serial);
                 }
                 dirty = true;
-            } else if (key == 'c' || key == 'C' || key == KEY_F(2)) {
+            } else if (key == 'c' || key == 'C' || key == KEY_F(2)
+                    || key == 'p' || key == 'P' || key == KEY_F(3)) {
                 connect_mode = true;
+                connect_kind = SC_CONNECT_KIND_CONNECT;
                 connect_input[0] = '\0';
+                pair_code[0] = '\0';
+                pair_code_focused = false;
                 snprintf(status, sizeof(status), "connect ip:port");
                 dirty = true;
             } else if (key == KEY_MOUSE) {
@@ -1035,12 +1142,21 @@ main(void) {
         }
 
         if (dirty) {
-            getmaxyx(stdscr, rows, cols);
+            if (sc_resize_requested) {
+                sc_resize_requested = 0;
+                if (!sc_update_terminal_size(&panel, &form, &error_panel, &devices,
+                                             &rows, &cols)) {
+                    goto cleanup;
+                }
+            } else {
+                getmaxyx(stdscr, rows, cols);
+            }
             if (!sc_layout_resize(&panel, &form, &error_panel, rows, cols, &devices)) {
                 goto cleanup;
             }
             sc_render(screen, &panel, &form, &error_panel, &devices, &launch_opts,
-                      status, launch_error, connect_input, connect_mode,
+                      status, launch_error, connect_kind, connect_input, pair_code,
+                      pair_code_focused, connect_mode,
                       sc_connect_is_running(&connect_state), connect_spinner, rows, cols);
         }
     }
