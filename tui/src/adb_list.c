@@ -473,6 +473,43 @@ sc_adb_connect(const char *endpoint) {
 }
 
 bool
+sc_adb_pair(const char *endpoint, const char *code) {
+    if (!endpoint || !endpoint[0] || !code || !code[0]) {
+        errno = EINVAL;
+        return false;
+    }
+
+    char *adb = sc_find_adb();
+    if (!adb) {
+        return false;
+    }
+
+    char quoted_adb[1024];
+    char quoted_endpoint[256];
+    char quoted_code[64];
+    if (!sc_quote_command_arg(adb, quoted_adb, sizeof(quoted_adb))
+            || !sc_quote_command_arg(endpoint, quoted_endpoint, sizeof(quoted_endpoint))
+            || !sc_quote_command_arg(code, quoted_code, sizeof(quoted_code))) {
+        free(adb);
+        return false;
+    }
+
+    char command[1400];
+    int written = snprintf(command, sizeof(command), "%s pair %s %s", quoted_adb,
+                           quoted_endpoint, quoted_code);
+    free(adb);
+    if (written < 0 || (size_t) written >= sizeof(command)) {
+        errno = ENAMETOOLONG;
+        return false;
+    }
+
+    char buf[512];
+    return sc_popen_silent(command, buf, sizeof(buf)) >= 0
+            && strstr(buf, "Successfully paired") != NULL
+            && strstr(buf, "failed") == NULL;
+}
+
+bool
 sc_adb_disconnect(const char *serial) {
     if (!serial || !serial[0]) {
         errno = EINVAL;
